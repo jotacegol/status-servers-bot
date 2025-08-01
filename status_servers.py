@@ -425,66 +425,67 @@ class RCONManager:
 
 def parse_match_info(match_data):
     """
-    Parsea la información del partido desde el JSON REAL - VERSIÓN CORREGIDA PARA TU SERVIDOR
+    Parsea la información del partido desde el JSON REAL de IOSoccer
     """
     if not match_data:
         logger.warning("⚠️ parse_match_info: match_data es None o vacío")
         return None
     
     try:
-        logger.info(f"🔍 Parseando match data REAL con {len(match_data)} campos")
+        logger.info(f"🔍 Parseando JSON real de IOSoccer con {len(match_data)} campos")
         
-        # TU JSON TIENE ESTRUCTURA DIRECTA, NO HAY 'matchData' wrapper
-        
-        # TIEMPO DEL PARTIDO - DESDE TU JSON
-        current_time_seconds = match_data.get('matchSeconds', 0)
-        time_display = match_data.get('matchDisplaySeconds', '0:00')
+        # EXTRAER DATOS DIRECTAMENTE DEL JSON (tu estructura real)
         period_name = match_data.get('matchPeriod', 'N/A')
+        time_display = match_data.get('matchDisplaySeconds', '0:00')
+        current_time_seconds = match_data.get('matchSeconds', 0)
         
-        logger.info(f"⏰ Tiempo desde JSON: {time_display} ({current_time_seconds}s) en período '{period_name}'")
-        
-        # NOMBRES DE EQUIPOS - DESDE TU JSON
+        # NOMBRES REALES DE LOS EQUIPOS
         team_home_name = match_data.get('teamNameHome', 'Local')
         team_away_name = match_data.get('teamNameAway', 'Visitante')
         
-        # GOLES - DESDE TU JSON
+        # GOLES REALES
         goals_home = match_data.get('matchGoalsHome', 0)
         goals_away = match_data.get('matchGoalsAway', 0)
         
-        logger.info(f"⚽ Marcador desde JSON: {team_home_name} {goals_home} - {goals_away} {team_away_name}")
-        
-        # JUGADORES ACTIVOS - DESDE TU JSON
+        # INFORMACIÓN DEL SERVIDOR
         active_players_count = match_data.get('serverPlayerCount', 0)
         max_players_total = match_data.get('serverMaxPlayers', 16)
-        
-        # FORMATO DEL PARTIDO - DESDE TU JSON
         match_format = match_data.get('matchFormat', 6)
-        format_display = f"{match_format}v{match_format}"
-        
-        # MAPA - DESDE TU JSON
         map_name = match_data.get('mapName', 'N/A')
         
-        # EVENTOS Y GOLES DETALLADOS - DESDE TU JSON
+        # EVENTOS DE GOLES
         events = match_data.get('matchEvents', [])
-        goals_detail = parse_goals_from_real_events(events)
+        goals_detail = []
         
-        # LINEUPS - DESDE TU JSON
-        lineup_home = match_data.get('teamLineupHome', [])
-        lineup_away = match_data.get('teamLineupAway', [])
+        # Procesar eventos de goles
+        for event in events:
+            if event.get('event') == 'GOAL':
+                goal_time_seconds = event.get('second', 0)
+                minutes = int(goal_time_seconds // 60)
+                seconds = int(goal_time_seconds % 60)
+                time_str = f"{minutes}:{seconds:02d}"
+                
+                goal_info = {
+                    'minute': time_str,
+                    'team': event.get('team', 'unknown'),
+                    'scorer_name': event.get('player1Name', 'Unknown'),
+                    'assist_name': event.get('player2Name', '') if event.get('player2Name') else '',
+                    'period': event.get('period', period_name)
+                }
+                goals_detail.append(goal_info)
         
-        logger.info(f"🎯 Información REAL parseada: {active_players_count} jugadores, {len(goals_detail)} goles")
+        logger.info(f"✅ Parseado exitoso: {team_home_name} {goals_home}-{goals_away} {team_away_name} ({time_display}, {period_name})")
         
-        # INFORMACIÓN COMPLETA
-        info = {
+        return {
             'period': period_name,
             'time_display': time_display,
             'time_seconds': current_time_seconds,
             'map_name': map_name,
-            'format': format_display,
+            'format': f"{match_format}v{match_format}",
             'match_type': 'IOSoccer Match',
             'server_name': 'IOSoccer Server',
             
-            # EQUIPOS - NOMBRES REALES
+            # EQUIPOS CON NOMBRES REALES
             'team_home': team_home_name,
             'team_away': team_away_name,
             'goals_home': goals_home,
@@ -494,19 +495,17 @@ def parse_match_info(match_data):
             'players_count': active_players_count,
             'max_players': max_players_total,
             
-            # INFORMACIÓN DETALLADA
-            'events': events,
+            # DETALLES
             'goals_detail': goals_detail,
-            'lineup_home': lineup_home,
-            'lineup_away': lineup_away,
+            'events': events,
+            'lineup_home': match_data.get('teamLineupHome', []),
+            'lineup_away': match_data.get('teamLineupAway', [])
         }
         
-        logger.info(f"✅ Match info REAL parseado: {info['team_home']} vs {info['team_away']}")
-        return info
-        
     except Exception as e:
-        logger.error(f"❌ Error parsing match info REAL: {e}")
+        logger.error(f"❌ Error parsing match info: {e}")
         return None
+
 def parse_goals_from_real_events(events):
     """
     Parsea goles desde TU estructura real de eventos
@@ -783,7 +782,7 @@ def get_active_players(lineup):
 def create_match_embed_improved(server_info):
     """Crea embed detallado con información del partido - VERSIÓN PARA TU JSON REAL"""
     if not server_info.match_info:
-        # Embed simple sin información de partido
+        # CAMBIAR este embed para que use datos A2S básicos
         embed = discord.Embed(
             title=f"⚽ {server_info.name}",
             color=0x00ff00 if "Online" in server_info.status else 0xff0000
@@ -794,10 +793,11 @@ def create_match_embed_improved(server_info):
         
         if "Online" in server_info.status:
             embed.add_field(
-                name="📊 Información del Servidor",
+                name="📊 Servidor Online (Sin Match Info)",
                 value=f"**👥 Jugadores:** {server_info.players}/{server_info.max_players}\n"
                       f"**🗺️ Mapa:** {server_info.map_name}\n"
-                      f"**🌐 Conectar:** `connect {connect_info};password elo`",
+                      f"**🌐 Conectar:** `connect {connect_info};password elo`\n"
+                      f"**⚠️ Estado:** Sin información de partido disponible",
                 inline=False
             )
         else:
@@ -1014,41 +1014,13 @@ async def get_server_info_robust(server):
         if match_result['success'] and match_result['data']:
             logger.info(f"📊 JSON obtenido para {server['name']}: {len(str(match_result['data']))} caracteres")
             
-            # Debug: mostrar estructura del JSON
-            json_keys = list(match_result['data'].keys()) if isinstance(match_result['data'], dict) else []
-            logger.info(f"🔍 Campos JSON principales: {json_keys}")
+            # SIEMPRE intentar parsear el JSON, sin importar si es básico o completo
+            match_info = parse_match_info(match_result['data'])
             
-            # Verificar si contiene datos de partido real
-            if ('matchData' in match_result['data'] or 
-                'teams' in match_result['data'] or 
-                'matchInfo' in match_result['data']):
-                
-                match_info = parse_match_info(match_result['data'])
-                
-                if match_info:
-                    logger.info(f"✅ Match info completa parseada para {server['name']}: {match_info['team_home']} {match_info['goals_home']}-{match_info['goals_away']} {match_info['team_away']} ({match_info['time_display']})")
-                else:
-                    logger.warning(f"⚠️ Match info no pudo ser parseada para {server['name']}")
+            if match_info:
+                logger.info(f"✅ Match info parseada: {match_info['team_home']} {match_info['goals_home']}-{match_info['goals_away']} {match_info['team_away']} ({match_info['time_display']})")
             else:
-                logger.info(f"📄 JSON básico para {server['name']}, creando datos por defecto")
-                # Crear información básica por defecto
-                match_info = {
-                    'period': 'Lobby/Warmup',
-                    'time_display': '0:00',
-                    'time_seconds': 0,
-                    'map_name': a2s_info.get('map_name', 'N/A'),
-                    'format': '8v8',
-                    'players_count': a2s_info.get('players', 0),
-                    'max_players': a2s_info.get('max_players', 16),
-                    'team_home': 'Local',
-                    'team_away': 'Visitante', 
-                    'goals_home': 0,
-                    'goals_away': 0,
-                    'goals_detail': [],
-                    'lineup_home': [],
-                    'lineup_away': [],
-                    'server_name': server['name']
-                }
+                logger.warning(f"⚠️ No se pudo parsear match info para {server['name']}")
         else:
             logger.warning(f"⚠️ No se pudo obtener JSON para {server['name']}: {match_result['error']}")
             match_info = None
