@@ -43,19 +43,23 @@ IOSOCCER_COMMANDS = [
 # Configuración de servidores
 SERVERS = [
     {
-        'name': 'Servidor IOSoccer #1',
+        'name': 'ELO #1',
         'ip': '45.235.98.16',
         'port': 27018,
-        'rcon_ports': [27018],
+        'rcon_ports': [27018],  # SOLO este puerto para este servidor
+        'id': 'iosoccer_1',     # ID único para logs
+        'max_connection_time': 30,  # Tiempo máximo total de conexión
     },
     {
-        'name': 'Servidor IOSoccer #2', 
+        'name': 'ELO #2', 
         'ip': '45.235.98.16',
         'port': 27019,
-        'rcon_ports': [27019],
+        'rcon_ports': [27019],  # SOLO este puerto para este servidor
+        'id': 'iosoccer_2',     # ID único para logs
+        'max_connection_time': 30,  # Tiempo máximo total de conexión
     }
 ]
-
+        
 # Bot configuration
 intents = discord.Intents.default()
 intents.message_content = True
@@ -134,131 +138,192 @@ class A2SQuery:
             return None
 
 class RCONManager:
-    """Manejador RCON usando rcon-client - MUCHO MÁS SIMPLE"""
+    """Manejador RCON mejorado con reintentos y timeouts progresivos"""
     
     @staticmethod
-    async def test_rcon_connection(ip, port, password, timeout=10):
+    async def test_rcon_connection_robust(ip, port, password, max_retries=3):
         """
-        Prueba la conexión RCON de forma simple
-        Returns: {'success': bool, 'error': str, 'response': str}
+        Prueba la conexión RCON con reintentos automáticos
+        Returns: {'success': bool, 'error': str, 'response': str, 'attempts': int}
         """
-        try:
-            logger.info(f"🔌 Probando RCON {ip}:{port}")
-            
-            # Usar rcon-client - MUY SIMPLE
-            with Client(ip, port, passwd=password, timeout=timeout) as client:
-                # Comando de prueba simple
-                response = client.run('echo "RCON_TEST_OK"')
-                
-                if response and 'RCON_TEST_OK' in response:
-                    logger.info(f"✅ RCON {ip}:{port} - Conexión exitosa")
-                    return {
-                        'success': True,
-                        'error': None,
-                        'response': response.strip()
-                    }
-                else:
-                    logger.warning(f"🔶 RCON {ip}:{port} - Respuesta inesperada: {response}")
-                    return {
-                        'success': True,  # Conecta pero respuesta rara
-                        'error': 'Respuesta inesperada',
-                        'response': response
-                    }
-                    
-        except Exception as e:
-            logger.error(f"❌ RCON {ip}:{port} - Error: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'response': None
-            }
-    
-    @staticmethod
-    async def execute_command(ip, port, password, command, timeout=10):
-        """
-        Ejecuta un comando RCON de forma simple
-        Returns: {'success': bool, 'response': str, 'error': str}
-        """
-        try:
-            logger.info(f"🔄 Ejecutando: {command} en {ip}:{port}")
-            
-            with Client(ip, port, passwd=password, timeout=timeout) as client:
-                response = client.run(command)
-                
-                if response and len(response.strip()) > 0:
-                    logger.info(f"✅ Comando exitoso: {len(response)} caracteres")
-                    return {
-                        'success': True,
-                        'response': response.strip(),
-                        'error': None
-                    }
-                else:
-                    logger.warning(f"⚠️ Sin respuesta para: {command}")
-                    return {
-                        'success': False,
-                        'response': '',
-                        'error': 'Sin respuesta'
-                    }
-                    
-        except Exception as e:
-            logger.error(f"❌ Error comando '{command}': {e}")
-            return {
-                'success': False,
-                'response': '',
-                'error': str(e)
-            }
-    
-    @staticmethod
-    async def find_working_rcon_port(server, password):
-        """
-        Encuentra el puerto RCON que funciona
-        Returns: {'port': int, 'success': bool, 'error': str}
-        """
-        logger.info(f"🔍 Buscando puerto RCON funcional para {server['name']}")
+        last_error = None
         
-        for port in server['rcon_ports']:
-            test_result = await RCONManager.test_rcon_connection(
-                server['ip'], port, password, timeout=8
-            )
-            
-            if test_result['success']:
-                logger.info(f"✅ Puerto RCON funcional encontrado: {port}")
-                return {
-                    'port': port,
-                    'success': True,
-                    'error': None
-                }
+        # Timeouts progresivos: 8s, 12s, 15s
+        timeouts = [8, 12, 15]
         
-        logger.error(f"❌ No se encontró puerto RCON funcional para {server['name']}")
+        for attempt in range(max_retries):
+            timeout = timeouts[min(attempt, len(timeouts) - 1)]
+            
+            try:
+                logger.info(f"🔌 Intento {attempt + 1}/{max_retries} RCON {ip}:{port} (timeout: {timeout}s)")
+                
+                # Usar timeout progresivo
+                with Client(ip, port, passwd=password, timeout=timeout) as client:
+                    # Comando de prueba simple pero confiable
+                    response = client.run('echo "RCON_TEST_OK"')
+                    
+                    if response and 'RCON_TEST_OK' in response:
+                        logger.info(f"✅ RCON {ip}:{port} - Conectado en intento {attempt + 1}")
+                        return {
+                            'success': True,
+                            'error': None,
+                            'response': response.strip(),
+                            'attempts': attempt + 1
+                        }
+                    else:
+                        last_error = f"Respuesta inesperada: {response}"
+                        logger.warning(f"🔶 RCON {ip}:{port} - {last_error}")
+                        
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"⚠️ RCON {ip}:{port} intento {attempt + 1} falló: {e}")
+                
+                # Esperar antes del siguiente intento (excepto en el último)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+        
+        logger.error(f"❌ RCON {ip}:{port} - Falló después de {max_retries} intentos")
         return {
-            'port': None,
             'success': False,
-            'error': 'No hay puertos RCON funcionales'
+            'error': f"Falló después de {max_retries} intentos: {last_error}",
+            'response': None,
+            'attempts': max_retries
         }
     
     @staticmethod
-    async def get_match_info_json(server, password):
+    async def execute_command_robust(ip, port, password, command, max_retries=2):
         """
-        Obtiene información del partido usando sv_matchinfojson
-        Returns: {'success': bool, 'data': dict, 'working_port': int, 'error': str}
+        Ejecuta un comando RCON con reintentos
+        Returns: {'success': bool, 'response': str, 'error': str, 'attempts': int}
         """
-        # Encontrar puerto funcional
-        port_result = await RCONManager.find_working_rcon_port(server, password)
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Timeout más largo para comandos complejos como sv_matchinfojson
+                timeout = 15 if 'matchinfo' in command.lower() else 10
+                
+                logger.info(f"🔄 Ejecutando '{command}' en {ip}:{port} (intento {attempt + 1}, timeout: {timeout}s)")
+                
+                with Client(ip, port, passwd=password, timeout=timeout) as client:
+                    response = client.run(command)
+                    
+                    if response is not None and len(response.strip()) > 0:
+                        logger.info(f"✅ Comando '{command}' exitoso en intento {attempt + 1}: {len(response)} chars")
+                        return {
+                            'success': True,
+                            'response': response.strip(),
+                            'error': None,
+                            'attempts': attempt + 1
+                        }
+                    else:
+                        last_error = 'Sin respuesta del servidor'
+                        logger.warning(f"⚠️ '{command}' sin respuesta en intento {attempt + 1}")
+                        
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"⚠️ '{command}' falló intento {attempt + 1}: {e}")
+                
+                # Esperar antes del siguiente intento
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.5)
+        
+        logger.error(f"❌ Comando '{command}' falló después de {max_retries} intentos")
+        return {
+            'success': False,
+            'response': '',
+            'error': f"Falló después de {max_retries} intentos: {last_error}",
+            'attempts': max_retries
+        }
+    
+    @staticmethod
+    async def find_working_rcon_port_safe(server, password):
+        """
+        Encuentra el puerto RCON funcional de forma SEGURA
+        Solo prueba los puertos específicos definidos para cada servidor
+        Returns: {'port': int, 'success': bool, 'error': str, 'attempts_per_port': dict}
+        """
+        logger.info(f"🔍 Buscando puerto RCON seguro para {server['name']}")
+        
+        # VALIDACIÓN: Solo usar puertos explícitamente definidos
+        allowed_ports = server.get('rcon_ports', [])
+        if not allowed_ports:
+            return {
+                'port': None,
+                'success': False,
+                'error': 'No hay puertos RCON definidos para este servidor',
+                'attempts_per_port': {}
+            }
+        
+        logger.info(f"🛡️ Puertos permitidos para {server['name']}: {allowed_ports}")
+        
+        attempts_log = {}
+        
+        # Probar SOLO los puertos permitidos
+        for port in allowed_ports:
+            logger.info(f"🔐 Probando puerto seguro: {port}")
+            
+            test_result = await RCONManager.test_rcon_connection_robust(
+                server['ip'], port, password, max_retries=3
+            )
+            
+            attempts_log[port] = {
+                'attempts': test_result.get('attempts', 0),
+                'success': test_result['success'],
+                'error': test_result.get('error', '')
+            }
+            
+            if test_result['success']:
+                logger.info(f"✅ Puerto RCON seguro encontrado: {port} (después de {test_result['attempts']} intentos)")
+                return {
+                    'port': port,
+                    'success': True,
+                    'error': None,
+                    'attempts_per_port': attempts_log
+                }
+            else:
+                logger.warning(f"❌ Puerto {port} falló: {test_result['error']}")
+        
+        # Si ningún puerto funciona
+        error_summary = f"Ningún puerto RCON funcional encontrado. Intentos: "
+        for port, info in attempts_log.items():
+            error_summary += f"{port}({info['attempts']}x), "
+        error_summary = error_summary.rstrip(', ')
+        
+        logger.error(f"❌ {error_summary}")
+        return {
+            'port': None,
+            'success': False,
+            'error': error_summary,
+            'attempts_per_port': attempts_log
+        }
+    
+    @staticmethod
+    async def get_match_info_json_safe(server, password):
+        """
+        Obtiene información del partido de forma SEGURA con reintentos
+        Returns: {'success': bool, 'data': dict, 'working_port': int, 'error': str, 'connection_info': dict}
+        """
+        logger.info(f"🎮 Obteniendo match info JSON SEGURO para {server['name']}")
+        
+        # 1. Encontrar puerto funcional de forma segura
+        port_result = await RCONManager.find_working_rcon_port_safe(server, password)
         
         if not port_result['success']:
             return {
                 'success': False,
                 'data': None,
                 'working_port': None,
-                'error': port_result['error']
+                'error': f"Sin puertos RCON: {port_result['error']}",
+                'connection_info': port_result['attempts_per_port']
             }
         
         working_port = port_result['port']
-        logger.info(f"🎮 Obteniendo match info JSON desde puerto {working_port}")
+        logger.info(f"🔐 Usando puerto seguro {working_port} para match info")
         
-        # Ejecutar sv_matchinfojson
-        result = await RCONManager.execute_command(
-            server['ip'], working_port, password, 'sv_matchinfojson', timeout=10
+        # 2. Ejecutar sv_matchinfojson con reintentos
+        result = await RCONManager.execute_command_robust(
+            server['ip'], working_port, password, 'sv_matchinfojson', max_retries=3
         )
         
         if not result['success'] or not result['response']:
@@ -266,36 +331,62 @@ class RCONManager:
                 'success': False,
                 'data': None,
                 'working_port': working_port,
-                'error': result['error'] or 'Sin respuesta JSON'
+                'error': f"Fallo comando JSON: {result['error']}",
+                'connection_info': {
+                    'port_attempts': port_result['attempts_per_port'],
+                    'command_attempts': result.get('attempts', 0)
+                }
             }
         
-        # Parsear JSON
+        # 3. Parsear JSON con manejo de errores mejorado
         try:
-            # Limpiar la respuesta (puede tener texto extra)
             response = result['response'].strip()
+            logger.info(f"📄 Respuesta cruda recibida: {len(response)} caracteres")
             
-            # Buscar el JSON en la respuesta
+            # Buscar JSON en la respuesta de forma más robusta
             json_start = response.find('{')
             json_end = response.rfind('}')
             
-            if json_start == -1 or json_end == -1:
-                return {
-                    'success': False,
-                    'data': None,
-                    'working_port': working_port,
-                    'error': 'No se encontró JSON válido en la respuesta'
-                }
+            if json_start == -1 or json_end == -1 or json_start >= json_end:
+                # Intentar buscar patrones alternativos
+                lines = response.split('\n')
+                json_line = None
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('{') and line.endswith('}'):
+                        json_line = line
+                        break
+                
+                if not json_line:
+                    return {
+                        'success': False,
+                        'data': None,
+                        'working_port': working_port,
+                        'error': f'JSON no encontrado en respuesta de {len(response)} caracteres',
+                        'connection_info': {
+                            'raw_response_preview': response[:200] + '...' if len(response) > 200 else response
+                        }
+                    }
+                
+                json_text = json_line
+            else:
+                json_text = response[json_start:json_end+1]
             
-            json_text = response[json_start:json_end+1]
+            # Parsear JSON
             match_data = json.loads(json_text)
             
-            logger.info(f"✅ JSON parseado exitosamente: {len(json_text)} caracteres")
+            logger.info(f"✅ JSON parseado exitosamente: {len(json_text)} caracteres, {len(match_data)} campos")
             
             return {
                 'success': True,
                 'data': match_data,
                 'working_port': working_port,
-                'error': None
+                'error': None,
+                'connection_info': {
+                    'port_attempts': port_result['attempts_per_port'],
+                    'command_attempts': result.get('attempts', 0),
+                    'json_size': len(json_text)
+                }
             }
             
         except json.JSONDecodeError as e:
@@ -304,7 +395,11 @@ class RCONManager:
                 'success': False,
                 'data': None,
                 'working_port': working_port,
-                'error': f'Error JSON: {str(e)}'
+                'error': f'JSON inválido: {str(e)}',
+                'connection_info': {
+                    'json_text_preview': json_text[:300] if 'json_text' in locals() else 'N/A',
+                    'parse_error': str(e)
+                }
             }
 
 def parse_match_info(match_data):
@@ -517,13 +612,23 @@ def create_status_embed(servers_info):
     
     return embed
 
-async def get_server_info(server):
-    """Obtiene información completa del servidor"""
+# Función mejorada para obtener información del servidor
+async def get_server_info_robust(server):
+    """Obtiene información completa del servidor con manejo robusto de errores"""
+    
+    # Validar configuración del servidor
+    if not server.get('rcon_ports'):
+        logger.error(f"❌ Servidor {server.get('name', 'Unknown')} sin puertos RCON definidos")
+        return ServerInfo(
+            name=server.get('name', 'Unknown'),
+            status="🔴 Error - Sin puertos RCON"
+        )
+    
     try:
-        logger.info(f"📡 Consultando servidor: {server['name']}")
+        logger.info(f"📡 Consultando servidor robusto: {server['name']} (ID: {server.get('id', 'unknown')})")
         
-        # 1. Información básica con A2S_INFO
-        a2s_info = A2SQuery.query_server(server['ip'], server['port'], timeout=6)
+        # 1. Información básica con A2S_INFO (timeout fijo)
+        a2s_info = A2SQuery.query_server(server['ip'], server['port'], timeout=8)
         
         if not a2s_info:
             return ServerInfo(
@@ -531,15 +636,17 @@ async def get_server_info(server):
                 status="🔴 Offline"
             )
         
-        # 2. Información del partido con sv_matchinfojson
-        match_result = await RCONManager.get_match_info_json(server, RCON_PASSWORD)
+        # 2. Información del partido con método seguro
+        match_result = await RCONManager.get_match_info_json_safe(server, RCON_PASSWORD)
         
         match_info = None
+        connection_details = match_result.get('connection_info', {})
+        
         if match_result['success'] and match_result['data']:
             match_info = parse_match_info(match_result['data'])
-            logger.info(f"✅ Match info obtenida para {server['name']}")
+            logger.info(f"✅ Match info obtenida para {server['name']} (puerto {match_result['working_port']})")
         else:
-            logger.warning(f"⚠️ No se pudo obtener match info: {match_result['error']}")
+            logger.warning(f"⚠️ No se pudo obtener match info para {server['name']}: {match_result['error']}")
         
         return ServerInfo(
             name=server['name'],
@@ -552,22 +659,198 @@ async def get_server_info(server):
         )
         
     except Exception as e:
-        logger.error(f"❌ Error obteniendo info de {server['name']}: {e}")
+        logger.error(f"❌ Error obteniendo info robusta de {server['name']}: {e}")
         return ServerInfo(
             name=server['name'],
-            status="🔴 Error",
+            status="🔴 Error General",
         )
-
+def validate_server_config():
+    """
+    Valida que la configuración de servidores sea segura
+    Returns: {'valid': bool, 'errors': list, 'warnings': list}
+    """
+    errors = []
+    warnings = []
+    
+    # Verificar que no hay puertos duplicados
+    all_ports = []
+    for server in SERVERS:
+        rcon_ports = server.get('rcon_ports', [])
+        
+        # Verificar configuración mínima
+        if not server.get('name'):
+            errors.append(f"Servidor sin nombre: {server}")
+        if not server.get('ip'):
+            errors.append(f"Servidor sin IP: {server.get('name', 'Unknown')}")
+        if not rcon_ports:
+            errors.append(f"Servidor sin puertos RCON: {server.get('name', 'Unknown')}")
+        
+        # Verificar puertos únicos
+        for port in rcon_ports:
+            if port in all_ports:
+                errors.append(f"Puerto RCON duplicado {port} en {server.get('name', 'Unknown')}")
+            all_ports.append(port)
+        
+        # Verificar que el puerto RCON coincida con el puerto del servidor (recomendado)
+        if server.get('port') not in rcon_ports:
+            warnings.append(f"Puerto servidor {server.get('port')} no está en puertos RCON {rcon_ports} para {server.get('name')}")
+    
+    logger.info(f"🔍 Configuración validada: {len(errors)} errores, {len(warnings)} advertencias")
+    
+    return {
+        'valid': len(errors) == 0,
+        'errors': errors,
+        'warnings': warnings,
+        'total_servers': len(SERVERS),
+        'total_ports': len(all_ports)
+    }
 # ============= COMANDOS DEL BOT =============
 
 @bot.event
 async def on_ready():
-    """Bot listo"""
+    """Bot listo con validación completa"""
     logger.info(f'🤖 {bot.user.name} conectado!')
-    logger.info(f'🔧 Usando rcon-client con Match Info JSON')
-    logger.info(f'🎮 Monitoreando {len(SERVERS)} servidores IOSoccer')
-    print('='*50)
-
+    
+    # 1. Validar configuración
+    config_validation = validate_server_config()
+    
+    if not config_validation['valid']:
+        logger.error("❌ CONFIGURACIÓN INVÁLIDA:")
+        for error in config_validation['errors']:
+            logger.error(f"  - {error}")
+        logger.warning("⚠️ El bot puede no funcionar correctamente")
+    else:
+        logger.info(f"✅ Configuración válida: {config_validation['total_servers']} servidores, {config_validation['total_ports']} puertos")
+    
+    if config_validation['warnings']:
+        logger.warning("⚠️ ADVERTENCIAS DE CONFIGURACIÓN:")
+        for warning in config_validation['warnings']:
+            logger.warning(f"  - {warning}")
+    
+    # 2. Test inicial de conectividad RCON (no bloqueante)
+    logger.info("🔍 Iniciando test de conectividad RCON...")
+    
+    connectivity_results = []
+    for server in SERVERS:
+        logger.info(f"🧪 Testing {server['name']}...")
+        
+        # Test rápido de cada puerto
+        server_connectivity = {
+            'server': server['name'],
+            'ports_tested': [],
+            'working_ports': [],
+            'total_time': 0
+        }
+        
+        start_time = time.time()
+        
+        for port in server.get('rcon_ports', []):
+            port_test = await RCONManager.test_rcon_connection_robust(
+                server['ip'], port, RCON_PASSWORD, max_retries=1  # Solo 1 intento en inicio
+            )
+            
+            server_connectivity['ports_tested'].append({
+                'port': port,
+                'success': port_test['success'],
+                'error': port_test.get('error', 'OK')
+            })
+            
+            if port_test['success']:
+                server_connectivity['working_ports'].append(port)
+        
+        server_connectivity['total_time'] = round(time.time() - start_time, 2)
+        connectivity_results.append(server_connectivity)
+        
+        # Log resultado
+        working_count = len(server_connectivity['working_ports'])
+        total_count = len(server['rcon_ports'])
+        
+        if working_count > 0:
+            logger.info(f"✅ {server['name']}: {working_count}/{total_count} puertos RCON funcionales en {server_connectivity['total_time']}s")
+        else:
+            logger.warning(f"❌ {server['name']}: 0/{total_count} puertos RCON funcionales")
+    
+    # 3. Resumen de conectividad
+    total_working = sum(len(result['working_ports']) for result in connectivity_results)
+    total_ports = sum(len(server.get('rcon_ports', [])) for server in SERVERS)
+    
+    logger.info("="*60)
+    logger.info(f"🎮 IOSoccer Bot INICIADO")
+    logger.info(f"📊 Resumen de conectividad: {total_working}/{total_ports} puertos RCON funcionales")
+    logger.info(f"🔧 Usando rcon-client con Match Info JSON")
+    logger.info(f"🛡️ Modo seguro: Solo puertos específicos por servidor")
+    logger.info("="*60)
+# Comando para diagnóstico completo
+@bot.command(name='diagnose')
+async def diagnose_system(ctx):
+    """Diagnóstico completo del sistema RCON"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Solo administradores")
+        return
+    
+    embed = discord.Embed(
+        title="🔍 Diagnóstico Completo del Sistema",
+        description="Verificando configuración y conectividad RCON...",
+        color=0xffaa00
+    )
+    
+    message = await ctx.send(embed=embed)
+    
+    # 1. Validación de configuración
+    config_validation = validate_server_config()
+    
+    config_status = "✅ Válida" if config_validation['valid'] else "❌ Inválida"
+    config_details = f"**Estado:** {config_status}\n"
+    config_details += f"**Servidores:** {config_validation['total_servers']}\n"
+    config_details += f"**Puertos totales:** {config_validation['total_ports']}\n"
+    
+    if config_validation['errors']:
+        config_details += f"**Errores:** {len(config_validation['errors'])}\n"
+    if config_validation['warnings']:
+        config_details += f"**Advertencias:** {len(config_validation['warnings'])}\n"
+    
+    embed.add_field(
+        name="⚙️ Configuración",
+        value=config_details,
+        inline=False
+    )
+    
+    await message.edit(embed=embed)
+    
+    # 2. Test de conectividad por servidor
+    for i, server in enumerate(SERVERS):
+        embed.description = f"Probando {server['name']} ({i+1}/{len(SERVERS)})..."
+        await message.edit(embed=embed)
+        
+        # Test completo del servidor
+        connectivity_test = await RCONManager.find_working_rcon_port_safe(server, RCON_PASSWORD)
+        
+        if connectivity_test['success']:
+            status = f"✅ Puerto {connectivity_test['port']} funcional"
+            
+            # Test comando específico
+            cmd_test = await RCONManager.execute_command_robust(
+                server['ip'], connectivity_test['port'], RCON_PASSWORD, 'sv_matchinfojson', max_retries=1
+            )
+            
+            if cmd_test['success']:
+                status += f"\n📊 sv_matchinfojson: OK ({len(cmd_test['response'])} chars)"
+            else:
+                status += f"\n⚠️ sv_matchinfojson: {cmd_test['error'][:50]}..."
+                
+        else:
+            status = f"❌ Sin puertos funcionales\n{connectivity_test['error'][:100]}..."
+        
+        embed.add_field(
+            name=f"🎮 {server['name']}",
+            value=status,
+            inline=False
+        )
+    
+    embed.description = "✅ Diagnóstico completado"
+    embed.color = 0x00ff00
+    
+    await message.edit(embed=embed)
 @bot.command(name='status')
 async def server_status(ctx):
     """Estado de todos los servidores con información detallada de partidos"""
