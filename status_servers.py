@@ -299,6 +299,20 @@ class RCONManager:
         }
     
     @staticmethod
+    async def find_working_rcon_port(server, password):
+        """
+        FUNCIÓN FALTANTE - Alias para compatibilidad
+        """
+        return await RCONManager.find_working_rcon_port_safe(server, password)
+    
+    @staticmethod
+    async def execute_command(ip, port, password, command, timeout=10):
+        """
+        FUNCIÓN FALTANTE - Alias para compatibilidad
+        """
+        return await RCONManager.execute_command_robust(ip, port, password, command, max_retries=2)
+    
+    @staticmethod
     async def get_match_info_json_safe(server, password):
         """
         Obtiene información del partido de forma SEGURA con reintentos
@@ -401,58 +415,165 @@ class RCONManager:
                     'parse_error': str(e)
                 }
             }
+    
+    @staticmethod
+    async def get_match_info_json(server, password):
+        """
+        FUNCIÓN FALTANTE - Alias para compatibilidad
+        """
+        return await RCONManager.get_match_info_json_safe(server, password)
 
 def parse_match_info(match_data):
     """
-    Parsea la información del partido desde el JSON COMPLETO
+    Parsea la información del partido desde el JSON COMPLETO - VERSIÓN CORREGIDA
     Returns: dict con información organizada incluyendo goles detallados
     """
     if not match_data:
+        logger.warning("⚠️ parse_match_info: match_data es None o vacío")
         return None
     
     try:
+        logger.info(f"🔍 Parseando match data con {len(match_data)} campos principales")
+        
+        # Debug: Mostrar estructura del JSON
+        if 'matchData' in match_data:
+            match_core = match_data['matchData']
+            logger.info(f"📊 matchData encontrado con campos: {list(match_core.keys())}")
+        else:
+            logger.warning("⚠️ No se encontró 'matchData' en el JSON")
+            # Intentar usar el JSON directamente si no hay wrapper matchData
+            match_core = match_data
+        
         # Obtener información básica del partido
-        match_info = match_data.get('matchData', {}).get('matchInfo', {})
-        teams = match_data.get('matchData', {}).get('teams', [])
-        players = match_data.get('matchData', {}).get('players', [])
-        events = match_data.get('matchData', {}).get('matchEvents', [])
+        match_info = match_core.get('matchInfo', {})
+        teams = match_core.get('teams', [])
+        players = match_core.get('players', [])
+        events = match_core.get('matchEvents', [])
         
-        # Calcular tiempo actual del partido en formato MM:SS
-        start_time = match_info.get('startTime', 0)
-        end_time = match_info.get('endTime', 0)
-        total_seconds = end_time - start_time
+        logger.info(f"📋 Datos encontrados: matchInfo={len(match_info)}, teams={len(teams)}, players={len(players)}, events={len(events)}")
         
-        # Convertir a formato MM:SS
-        minutes = total_seconds // 60
-        seconds = total_seconds % 60
-        time_display = f"{minutes}:{seconds:02d}"
+        # TIEMPO DEL PARTIDO CORREGIDO
+        # IOSoccer usa diferentes campos según el estado del partido
+        current_time_seconds = 0
+        period_name = "N/A"
+        
+        # Obtener tiempo actual del partido
+        if 'currentTime' in match_info:
+            current_time_seconds = match_info.get('currentTime', 0)
+        elif 'matchTime' in match_info:
+            current_time_seconds = match_info.get('matchTime', 0)
+        elif 'gameTime' in match_info:
+            current_time_seconds = match_info.get('gameTime', 0)
+        
+        # Obtener período actual
+        if 'period' in match_info:
+            period_name = match_info.get('period', 'N/A')
+        elif 'currentPeriod' in match_info:
+            period_name = match_info.get('currentPeriod', 'N/A')
+        elif 'lastPeriodName' in match_info:
+            period_name = match_info.get('lastPeriodName', 'N/A')
+        
+        # Convertir segundos a formato MM:SS
+        if current_time_seconds > 0:
+            minutes = int(current_time_seconds // 60)
+            seconds = int(current_time_seconds % 60)
+            time_display = f"{minutes}:{seconds:02d}"
+        else:
+            time_display = "0:00"
+        
+        logger.info(f"⏰ Tiempo parseado: {time_display} ({current_time_seconds}s) en período '{period_name}'")
+        
+        # EQUIPOS Y MARCADOR CORREGIDO
+        team_home_name = "Local"
+        team_away_name = "Visitante"
+        goals_home = 0
+        goals_away = 0
+        
+        if len(teams) >= 2:
+            # Equipo local (índice 0)
+            if 'name' in teams[0]:
+                team_home_name = teams[0]['name']
+            elif 'teamName' in teams[0]:
+                team_home_name = teams[0]['teamName']
+            
+            # Equipo visitante (índice 1)
+            if 'name' in teams[1]:
+                team_away_name = teams[1]['name']
+            elif 'teamName' in teams[1]:
+                team_away_name = teams[1]['teamName']
+            
+            # Goles - Buscar en diferentes campos posibles
+            home_team_data = teams[0]
+            away_team_data = teams[1]
+            
+            # Probar diferentes estructuras para goles
+            if 'goals' in home_team_data:
+                goals_home = home_team_data['goals']
+                goals_away = away_team_data.get('goals', 0)
+            elif 'score' in home_team_data:
+                goals_home = home_team_data['score']
+                goals_away = away_team_data.get('score', 0)
+            elif 'matchTotal' in home_team_data:
+                # Estructura más compleja con estadísticas
+                home_stats = home_team_data.get('matchTotal', {}).get('statistics', [])
+                away_stats = away_team_data.get('matchTotal', {}).get('statistics', [])
+                
+                # Los goles suelen estar en el índice 12 de las estadísticas
+                if len(home_stats) > 12:
+                    goals_home = home_stats[12]
+                if len(away_stats) > 12:
+                    goals_away = away_stats[12]
+        
+        logger.info(f"⚽ Marcador parseado: {team_home_name} {goals_home} - {goals_away} {team_away_name}")
+        
+        # JUGADORES ACTIVOS CORREGIDO
+        active_players_count = count_real_players(players)
+        max_players_estimated = match_info.get('maxPlayers', 16)
+        
+        # Si no hay maxPlayers, estimar basado en formato
+        if max_players_estimated == 16:
+            format_str = match_info.get('format', '8v8')
+            if 'v' in format_str:
+                try:
+                    team_size = int(format_str.split('v')[0])
+                    max_players_estimated = team_size * 2
+                except:
+                    max_players_estimated = 16
+        
+        # INFORMACIÓN DEL MAPA
+        map_name = match_info.get('mapName', match_info.get('map', 'N/A'))
+        
+        # EVENTOS Y GOLES DETALLADOS
+        goals_detail = parse_goals_from_events(events, players)
+        
+        logger.info(f"🎯 Información completa parseada: {active_players_count} jugadores, {len(goals_detail)} goles")
         
         # Información básica
         info = {
-            'period': match_info.get('lastPeriodName', 'N/A'),
-            'time_display': time_display,  # Tiempo formateado
-            'time_seconds': total_seconds,
-            'map_name': match_info.get('mapName', 'N/A'),
-            'format': f"{match_info.get('format', 8)}v{match_info.get('format', 8)}",
-            'match_type': match_info.get('type', 'N/A'),
+            'period': period_name,
+            'time_display': time_display,
+            'time_seconds': current_time_seconds,
+            'map_name': map_name,
+            'format': match_info.get('format', '8v8'),
+            'match_type': match_info.get('type', match_info.get('gameType', 'N/A')),
             'server_name': match_info.get('serverName', 'N/A'),
             
             # Información de equipos
-            'team_home': teams[0].get('matchTotal', {}).get('name', 'Local') if len(teams) > 0 else 'Local',
-            'team_away': teams[1].get('matchTotal', {}).get('name', 'Visitante') if len(teams) > 1 else 'Visitante',
-            'goals_home': teams[0].get('matchTotal', {}).get('statistics', [0]*28)[12] if len(teams) > 0 else 0,  # índice 12 = goles
-            'goals_away': teams[1].get('matchTotal', {}).get('statistics', [0]*28)[12] if len(teams) > 1 else 0,
+            'team_home': team_home_name,
+            'team_away': team_away_name,
+            'goals_home': goals_home,
+            'goals_away': goals_away,
             
-            # Contar jugadores (excluyendo bots)
-            'players_count': count_real_players(players),
-            'max_players': match_info.get('format', 8) * 2,  # Estimado basado en formato
+            # Jugadores
+            'players_count': active_players_count,
+            'max_players': max_players_estimated,
             
-            # Información de jugadores y eventos
+            # Información detallada
             'players': players,
             'events': events,
-            'goals_detail': parse_goals_from_events(events, players),
+            'goals_detail': goals_detail,
             
-            # Para compatibilidad con la función original
+            # Para compatibilidad
             'lineup_home': extract_team_players(players, 'home'),
             'lineup_away': extract_team_players(players, 'away'),
             
@@ -462,79 +583,126 @@ def parse_match_info(match_data):
             }
         }
         
+        logger.info(f"✅ Match info parseado exitosamente para {info['server_name']}")
         return info
         
     except Exception as e:
         logger.error(f"❌ Error parsing match info completo: {e}")
+        logger.error(f"❌ Estructura del JSON recibido: {list(match_data.keys()) if isinstance(match_data, dict) else type(match_data)}")
         return None
 
 def count_real_players(players):
     """
-    Cuenta solo los jugadores reales (no bots)
+    Cuenta solo los jugadores reales (no bots) - VERSIÓN MEJORADA
     """
+    if not players:
+        return 0
+    
     real_players = 0
     for player in players:
-        steam_id = player.get('info', {}).get('steamId', '')
-        if steam_id and steam_id != 'BOT' and steam_id != 'SourceTV':
+        # Diferentes estructuras posibles
+        if 'info' in player:
+            player_info = player['info']
+        else:
+            player_info = player
+        
+        steam_id = player_info.get('steamId', player_info.get('steamID', ''))
+        name = player_info.get('name', '')
+        
+        # Filtrar bots y SourceTV
+        if (steam_id and 
+            steam_id != 'BOT' and 
+            steam_id != 'SourceTV' and 
+            not name.startswith('Bot') and
+            steam_id != '0'):
             real_players += 1
+    
     return real_players
 
 def extract_team_players(players, team_side):
     """
-    Extrae jugadores de un equipo específico para compatibilidad
+    Extrae jugadores de un equipo específico para compatibilidad - MEJORADO
     """
     team_players = []
     
     for player in players:
-        player_info = player.get('info', {})
-        steam_id = player_info.get('steamId', '')
+        if 'info' in player:
+            player_info = player['info']
+            periods = player.get('matchPeriodData', player.get('periods', []))
+        else:
+            player_info = player
+            periods = player.get('periods', [])
+        
+        steam_id = player_info.get('steamId', player_info.get('steamID', ''))
         name = player_info.get('name', 'Unknown')
         
         if steam_id == 'BOT' or steam_id == 'SourceTV' or not steam_id:
             continue
-            
-        # Buscar la posición más reciente del jugador
-        periods = player.get('matchPeriodData', [])
-        if not periods:
-            continue
-            
-        # Obtener el último período jugado
-        last_period = periods[-1]
-        last_team = last_period.get('info', {}).get('team', '')
-        last_position = last_period.get('info', {}).get('position', 'N/A')
         
-        if last_team == team_side:
+        # Buscar equipo actual del jugador
+        current_team = None
+        current_position = 'N/A'
+        
+        if periods:
+            # Obtener el último período jugado
+            last_period = periods[-1]
+            if 'info' in last_period:
+                current_team = last_period['info'].get('team', '')
+                current_position = last_period['info'].get('position', 'N/A')
+            else:
+                current_team = last_period.get('team', '')
+                current_position = last_period.get('position', 'N/A')
+        else:
+            # Si no hay períodos, buscar en el player_info directamente
+            current_team = player_info.get('team', '')
+            current_position = player_info.get('position', 'N/A')
+        
+        if current_team == team_side:
             team_players.append({
                 'steamId': steam_id,
                 'name': name,
-                'position': last_position
+                'position': current_position
             })
     
     return team_players
 
 def parse_goals_from_events(events, players):
     """
-    Extrae información detallada de goles desde los eventos
+    Extrae información detallada de goles desde los eventos - MEJORADO
     Returns: list de dict con información de cada gol
     """
+    if not events:
+        return []
+    
     goals = []
     
     # Crear diccionario de jugadores para búsqueda rápida
     player_dict = {}
     for player in players:
-        steam_id = player.get('info', {}).get('steamId', '')
-        name = player.get('info', {}).get('name', 'Unknown')
+        if 'info' in player:
+            player_info = player['info']
+        else:
+            player_info = player
+        
+        steam_id = player_info.get('steamId', player_info.get('steamID', ''))
+        name = player_info.get('name', 'Unknown')
+        
         if steam_id and steam_id != 'BOT' and steam_id != 'SourceTV':
             player_dict[steam_id] = name
     
     # Procesar eventos de goles
     for event in events:
-        if event.get('event') == 'GOAL':
-            scorer_id = event.get('player1SteamId', '')
-            assist_id = event.get('player2SteamId', '')
+        event_type = event.get('event', event.get('type', ''))
+        
+        if event_type.upper() == 'GOAL':
+            scorer_id = event.get('player1SteamId', event.get('scorerSteamId', ''))
+            assist_id = event.get('player2SteamId', event.get('assistSteamId', ''))
+            
+            # Tiempo del gol
+            goal_time_seconds = event.get('second', event.get('time', 0))
             
             goal_info = {
-                'minute': seconds_to_minutes(event.get('second', 0)),
+                'minute': seconds_to_minutes(goal_time_seconds),
                 'period': event.get('period', 'N/A'),
                 'team': event.get('team', 'N/A'),
                 'scorer_id': scorer_id,
@@ -542,7 +710,7 @@ def parse_goals_from_events(events, players):
                 'scorer_name': player_dict.get(scorer_id, 'Unknown'),
                 'assist_name': player_dict.get(assist_id, '') if assist_id else '',
                 'body_part': event.get('bodyPart', 1),  # 1=pie, 4=cabeza
-                'position': event.get('startPosition', {})
+                'position': event.get('startPosition', event.get('position', {}))
             }
             goals.append(goal_info)
     
@@ -555,8 +723,8 @@ def seconds_to_minutes(seconds):
     if not seconds:
         return "0:00"
     
-    minutes = seconds // 60
-    remaining_seconds = seconds % 60
+    minutes = int(seconds // 60)
+    remaining_seconds = int(seconds % 60)
     return f"{minutes}:{remaining_seconds:02d}"
 
 def get_player_goals_stats(players, team_side):
@@ -566,8 +734,14 @@ def get_player_goals_stats(players, team_side):
     player_goals = {}
     
     for player in players:
-        player_info = player.get('info', {})
-        steam_id = player_info.get('steamId', '')
+        if 'info' in player:
+            player_info = player['info']
+            periods = player.get('matchPeriodData', [])
+        else:
+            player_info = player
+            periods = player.get('periods', [])
+        
+        steam_id = player_info.get('steamId', player_info.get('steamID', ''))
         name = player_info.get('name', 'Unknown')
         
         if steam_id == 'BOT' or not steam_id:
@@ -577,10 +751,15 @@ def get_player_goals_stats(players, team_side):
         total_assists = 0
         
         # Sumar goles de todos los períodos
-        for period_data in player.get('matchPeriodData', []):
-            period_info = period_data.get('info', {})
-            if period_info.get('team') == team_side:
+        for period_data in periods:
+            if 'info' in period_data:
+                period_info = period_data['info']
                 stats = period_data.get('statistics', [])
+            else:
+                period_info = period_data
+                stats = period_data.get('stats', [])
+            
+            if period_info.get('team') == team_side:
                 if len(stats) > 12:  # índice 12 = goles
                     total_goals += stats[12]
                 if len(stats) > 14:  # índice 14 = asistencias
@@ -644,7 +823,7 @@ def get_active_players(lineup):
     return active_players
 
 def create_match_embed(server_info):
-    """Crea embed detallado con información del partido"""
+    """Crea embed detallado con información del partido - VERSIÓN CORREGIDA"""
     if not server_info.match_info:
         # Embed simple sin información de partido
         embed = discord.Embed(
@@ -675,11 +854,16 @@ def create_match_embed(server_info):
     # Embed completo con información del partido
     match_info = server_info.match_info
     
-    # Color según el estado del partido
-    if match_info['period'] in ['FIRST HALF', 'SECOND HALF']:
-        color = 0x00ff00  # Verde - En juego
-    elif match_info['period'] == 'HALF TIME':
+    # Color según el estado del partido - MEJORADO
+    period = match_info['period'].upper()
+    if period in ['FIRST HALF', 'FIRST_HALF', '1ST HALF', 'PLAYING']:
+        color = 0x00ff00  # Verde - Primer tiempo
+    elif period in ['SECOND HALF', 'SECOND_HALF', '2ND HALF']:
+        color = 0x00aa00  # Verde más oscuro - Segundo tiempo
+    elif period in ['HALF TIME', 'HALF_TIME', 'HALFTIME']:
         color = 0xffa500  # Naranja - Descanso
+    elif period in ['FULL TIME', 'FULL_TIME', 'FINISHED', 'END']:
+        color = 0x888888  # Gris - Partido terminado
     else:
         color = 0x0099ff  # Azul - Otro estado
     
@@ -701,17 +885,20 @@ def create_match_embed(server_info):
         inline=False
     )
     
-    # Marcador principal
+    # Marcador principal con estado del partido
     score_text = f"**{match_info['team_home']} {match_info['goals_home']} - {match_info['goals_away']} {match_info['team_away']}**"
+    
+    # Emoji según el período
+    period_emoji = "⚽" if period in ['FIRST HALF', 'SECOND HALF', 'PLAYING'] else "⏸️" if period == 'HALF TIME' else "🏁" if period in ['FULL TIME', 'FINISHED'] else "📅"
     
     embed.add_field(
         name="🏆 Marcador",
         value=f"{score_text}\n"
-              f"⏱️ **{match_info['time_display']}** | 📅 **{match_info['period']}**",
+              f"⏱️ **{match_info['time_display']}** | {period_emoji} **{match_info['period']}**",
         inline=False
     )
     
-    # Goles detallados por equipo
+    # Goles detallados por equipo - MEJORADO
     if match_info.get('goals_detail'):
         # Formatear goles del equipo local
         home_goals = [goal for goal in match_info['goals_detail'] if goal['team'] == 'home']
@@ -722,12 +909,12 @@ def create_match_embed(server_info):
             home_goals_text = ""
             for goal in home_goals:
                 assist_text = f" ({goal['assist_name']})" if goal['assist_name'] else ""
-                home_goals_text += f"{goal['scorer_name']} ({goal['minute']}){assist_text}\n"
+                home_goals_text += f"⚽ **{goal['minute']}** {goal['scorer_name']}{assist_text}\n"
         else:
             home_goals_text = "Sin goles"
         
         embed.add_field(
-            name=f"⚽ Goles {match_info['team_home']}:",
+            name=f"🥅 Goles {match_info['team_home']}",
             value=home_goals_text.strip(),
             inline=True
         )
@@ -737,12 +924,12 @@ def create_match_embed(server_info):
             away_goals_text = ""
             for goal in away_goals:
                 assist_text = f" ({goal['assist_name']})" if goal['assist_name'] else ""
-                away_goals_text += f"{goal['scorer_name']} ({goal['minute']}){assist_text}\n"
+                away_goals_text += f"⚽ **{goal['minute']}** {goal['scorer_name']}{assist_text}\n"
         else:
             away_goals_text = "Sin goles"
         
         embed.add_field(
-            name=f"⚽ Goles {match_info['team_away']}:",
+            name=f"🥅 Goles {match_info['team_away']}",
             value=away_goals_text.strip(),
             inline=True
         )
@@ -775,18 +962,21 @@ def create_match_embed(server_info):
                     inline=False
                 )
     else:
-        # Sin información de goles detallada
+        # Sin información de goles detallada - mostrar solo marcador
         embed.add_field(
-            name=f"⚽ Goles {match_info['team_home']}:",
-            value="Sin información detallada",
+            name=f"🥅 {match_info['team_home']}",
+            value=f"**{match_info['goals_home']} goles**",
             inline=True
         )
         
         embed.add_field(
-            name=f"⚽ Goles {match_info['team_away']}:",
-            value="Sin información detallada", 
+            name=f"🥅 {match_info['team_away']}",
+            value=f"**{match_info['goals_away']} goles**", 
             inline=True
         )
+    
+    # Footer con información de debugging
+    embed.set_footer(text=f"🔄 JSON actualizado | {datetime.now().strftime('%H:%M:%S')}")
     
     return embed
 
@@ -810,7 +1000,7 @@ def create_status_embed(servers_info):
             
             # Verificar si hay partido activo
             if (server_info.match_info and 
-                server_info.match_info['period'] in ['FIRST HALF', 'SECOND HALF']):
+                server_info.match_info['period'].upper() in ['FIRST HALF', 'SECOND HALF', 'PLAYING']):
                 active_matches += 1
     
     # Resumen general
@@ -832,7 +1022,7 @@ def create_status_embed(servers_info):
 
 # Función mejorada para obtener información del servidor
 async def get_server_info_robust(server):
-    """Obtiene información completa del servidor con manejo robusto de errores"""
+    """Obtiene información completa del servidor con manejo robusto de errores - VERSIÓN CORREGIDA"""
     
     # Validar configuración del servidor
     if not server.get('rcon_ports'):
@@ -849,10 +1039,13 @@ async def get_server_info_robust(server):
         a2s_info = A2SQuery.query_server(server['ip'], server['port'], timeout=8)
         
         if not a2s_info:
+            logger.warning(f"❌ A2S_INFO falló para {server['name']}")
             return ServerInfo(
                 name=server['name'],
                 status="🔴 Offline"
             )
+        
+        logger.info(f"✅ A2S_INFO exitoso para {server['name']}: {a2s_info['players']}/{a2s_info['max_players']}")
         
         # 2. Información del partido con método seguro
         match_result = await RCONManager.get_match_info_json_safe(server, RCON_PASSWORD)
@@ -861,28 +1054,45 @@ async def get_server_info_robust(server):
         connection_details = match_result.get('connection_info', {})
         
         if match_result['success'] and match_result['data']:
-            if 'matchData' in match_result['data']:
+            logger.info(f"📊 JSON obtenido para {server['name']}: {len(str(match_result['data']))} caracteres")
+            
+            # Debug: mostrar estructura del JSON
+            json_keys = list(match_result['data'].keys()) if isinstance(match_result['data'], dict) else []
+            logger.info(f"🔍 Campos JSON principales: {json_keys}")
+            
+            # Verificar si contiene datos de partido real
+            if ('matchData' in match_result['data'] or 
+                'teams' in match_result['data'] or 
+                'matchInfo' in match_result['data']):
+                
                 match_info = parse_match_info(match_result['data'])
-                logger.info(f"✅ Match info completa obtenida para {server['name']} (puerto {match_result['working_port']})")
+                
+                if match_info:
+                    logger.info(f"✅ Match info completa parseada para {server['name']}: {match_info['team_home']} {match_info['goals_home']}-{match_info['goals_away']} {match_info['team_away']} ({match_info['time_display']})")
+                else:
+                    logger.warning(f"⚠️ Match info no pudo ser parseada para {server['name']}")
             else:
-                logger.info(f"📄 JSON simple para {server['name']}, usando datos básicos")
+                logger.info(f"📄 JSON básico para {server['name']}, creando datos por defecto")
+                # Crear información básica por defecto
                 match_info = {
-                    'period': 'N/A',
+                    'period': 'Lobby/Warmup',
                     'time_display': '0:00',
                     'time_seconds': 0,
-                    'map_name': match_result['data'].get('mapName', 'N/A'),
+                    'map_name': a2s_info.get('map_name', 'N/A'),
                     'format': '8v8',
-                    'players_count': 0,
-                    'max_players': 16,
+                    'players_count': a2s_info.get('players', 0),
+                    'max_players': a2s_info.get('max_players', 16),
                     'team_home': 'Local',
                     'team_away': 'Visitante', 
                     'goals_home': 0,
                     'goals_away': 0,
                     'goals_detail': [],
                     'lineup_home': [],
-                    'lineup_away': []
+                    'lineup_away': [],
+                    'server_name': server['name']
                 }
         else:
+            logger.warning(f"⚠️ No se pudo obtener JSON para {server['name']}: {match_result['error']}")
             match_info = None
         
         return ServerInfo(
@@ -942,6 +1152,7 @@ def validate_server_config():
         'total_servers': len(SERVERS),
         'total_ports': len(all_ports)
     }
+
 # ============= COMANDOS DEL BOT =============
 
 @bot.event
@@ -1013,11 +1224,13 @@ async def on_ready():
     total_ports = sum(len(server.get('rcon_ports', [])) for server in SERVERS)
     
     logger.info("="*60)
-    logger.info(f"🎮 IOSoccer Bot INICIADO")
+    logger.info(f"🎮 IOSoccer Bot INICIADO - VERSIÓN CORREGIDA")
     logger.info(f"📊 Resumen de conectividad: {total_working}/{total_ports} puertos RCON funcionales")
-    logger.info(f"🔧 Usando rcon-client con Match Info JSON")
+    logger.info(f"🔧 Usando rcon-client con Match Info JSON mejorado")
     logger.info(f"🛡️ Modo seguro: Solo puertos específicos por servidor")
+    logger.info(f"🎯 Parsing mejorado para tiempo real y marcadores")
     logger.info("="*60)
+
 # Comando para diagnóstico completo
 @bot.command(name='diagnose')
 async def diagnose_system(ctx):
@@ -1072,7 +1285,24 @@ async def diagnose_system(ctx):
             )
             
             if cmd_test['success']:
-                status += f"\n📊 sv_matchinfojson: OK ({len(cmd_test['response'])} chars)"
+                try:
+                    # Intentar parsear el JSON para verificar calidad
+                    json_response = cmd_test['response']
+                    json_start = json_response.find('{')
+                    json_end = json_response.rfind('}')
+                    
+                    if json_start != -1 and json_end != -1:
+                        json_text = json_response[json_start:json_end+1]
+                        parsed_data = json.loads(json_text)
+                        
+                        # Verificar si contiene datos de partido
+                        has_match_data = ('matchData' in parsed_data or 'teams' in parsed_data)
+                        status += f"\n📊 sv_matchinfojson: ✅ ({len(json_text)} chars, {'Match Data' if has_match_data else 'Basic Data'})"
+                    else:
+                        status += f"\n📊 sv_matchinfojson: ⚠️ Sin JSON válido"
+                        
+                except json.JSONDecodeError:
+                    status += f"\n📊 sv_matchinfojson: ⚠️ JSON inválido"
             else:
                 status += f"\n⚠️ sv_matchinfojson: {cmd_test['error'][:50]}..."
                 
@@ -1089,9 +1319,10 @@ async def diagnose_system(ctx):
     embed.color = 0x00ff00
     
     await message.edit(embed=embed)
+
 @bot.command(name='status')
 async def server_status(ctx):
-    """Estado de todos los servidores con información detallada de partidos"""
+    """Estado de todos los servidores con información detallada de partidos - VERSIÓN CORREGIDA"""
     loading_embed = discord.Embed(
         title="🔄 Consultando servidores...",
         description="Obteniendo información A2S + Match Info JSON",
@@ -1113,6 +1344,12 @@ async def server_status(ctx):
         server_info = await get_server_info_robust(server)
         servers_info.append(server_info)
         
+        # Log del resultado para debugging
+        if server_info.match_info:
+            logger.info(f"📊 {server['name']}: {server_info.match_info['team_home']} {server_info.match_info['goals_home']}-{server_info.match_info['goals_away']} {server_info.match_info['team_away']} ({server_info.match_info['time_display']}, {server_info.match_info['period']})")
+        else:
+            logger.info(f"📊 {server['name']}: Sin match info, {server_info.players}/{server_info.max_players} jugadores")
+        
         # Limpiar field para próxima iteración
         loading_embed.clear_fields()
     
@@ -1122,13 +1359,8 @@ async def server_status(ctx):
     
     # Luego mostrar cada servidor individualmente con detalles
     for server_info in servers_info:
-        if "Online" in server_info.status:
-            match_embed = create_match_embed(server_info)
-            await ctx.send(embed=match_embed)
-        else:
-            # Para servidores offline, mostrar embed simple
-            offline_embed = create_match_embed(server_info)
-            await ctx.send(embed=offline_embed)
+        match_embed = create_match_embed(server_info)
+        await ctx.send(embed=match_embed)
 
 @bot.command(name='server')
 async def individual_server(ctx, server_num: int = 1):
@@ -1216,7 +1448,7 @@ async def test_rcon_simple(ctx, server_num: int = 1, *, command: str = "status")
 
 @bot.command(name='matchjson')
 async def get_match_json(ctx, server_num: int = 1):
-    """Obtiene el JSON completo del partido"""
+    """Obtiene el JSON completo del partido con análisis detallado"""
     if server_num < 1 or server_num > len(SERVERS):
         await ctx.send(f"❌ Servidor inválido. Usa 1-{len(SERVERS)}")
         return
@@ -1242,19 +1474,47 @@ async def get_match_json(ctx, server_num: int = 1):
         await message.edit(embed=error_embed)
         return
     
-    # Mostrar JSON formateado
-    json_text = json.dumps(match_result['data'], indent=2, ensure_ascii=False)
+    # Analizar JSON
+    json_data = match_result['data']
+    json_text = json.dumps(json_data, indent=2, ensure_ascii=False)
     
-    if len(json_text) > 1900:  # Límite de Discord
-        # Dividir en partes
-        json_preview = json_text[:1900] + "\n... (truncado)"
+    embed = discord.Embed(
+        title=f"📋 Match JSON - {server['name']}",
+        description=f"Puerto RCON: {match_result['working_port']}",
+        color=0x00ff00
+    )
+    
+    # Análisis de la estructura
+    if isinstance(json_data, dict):
+        analysis = f"**Campos principales:** {len(json_data)}\n"
+        analysis += f"**Claves:** {', '.join(list(json_data.keys())[:5])}\n"
         
-        embed = discord.Embed(
-            title=f"📋 Match JSON - {server['name']}",
-            description=f"Puerto RCON: {match_result['working_port']}",
-            color=0x00ff00
+        if 'matchData' in json_data:
+            match_core = json_data['matchData']
+            analysis += f"**matchData:** ✅ ({len(match_core)} subcampos)\n"
+            
+            if 'teams' in match_core:
+                analysis += f"**teams:** {len(match_core['teams'])} equipos\n"
+            if 'players' in match_core:
+                analysis += f"**players:** {len(match_core['players'])} jugadores\n"
+            if 'matchEvents' in match_core:
+                analysis += f"**matchEvents:** {len(match_core['matchEvents'])} eventos\n"
+        
+        embed.add_field(
+            name="🔍 Análisis JSON",
+            value=analysis,
+            inline=False
         )
-        
+    
+    # Mostrar JSON (truncado si es muy largo)
+    if len(json_text) > 1800:
+        json_preview = json_text[:1800] + "\n... (truncado para Discord)"
+        embed.add_field(
+            name=f"📄 JSON Data ({len(json_text)} caracteres total)",
+            value=f"```json\n{json_preview}\n```",
+            inline=False
+        )
+    else:
         embed.add_field(
             name="📄 JSON Data",
             value=f"```json\n{json_text}\n```",
@@ -1366,6 +1626,171 @@ async def test_all_commands(ctx, server_num: int = 1):
     
     await message.edit(embed=embed)
 
+@bot.command(name='debug_parse')
+async def debug_parse(ctx, server_num: int = 1):
+    """Debug del parsing de match info - COMANDO NUEVO PARA DEBUGGING"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Solo administradores")
+        return
+    
+    if server_num < 1 or server_num > len(SERVERS):
+        await ctx.send(f"❌ Servidor inválido. Usa 1-{len(SERVERS)}")
+        return
+    
+    server = SERVERS[server_num - 1]
+    
+    loading_embed = discord.Embed(
+        title=f"🔍 Debug Parsing - {server['name']}",
+        description="Analizando paso a paso el parsing del JSON...",
+        color=0xff6600
+    )
+    message = await ctx.send(embed=loading_embed)
+    
+    # Obtener JSON crudo
+    match_result = await RCONManager.get_match_info_json_safe(server, RCON_PASSWORD)
+    
+    if not match_result['success']:
+        embed = discord.Embed(
+            title="❌ Error en Debug",
+            description=f"No se pudo obtener JSON: {match_result['error']}",
+            color=0xff0000
+        )
+        await message.edit(embed=embed)
+        return
+    
+    json_data = match_result['data']
+    
+    embed = discord.Embed(
+        title=f"🔍 Debug Parsing - {server['name']}",
+        color=0x00aaff
+    )
+    
+    # Paso 1: Estructura JSON
+    if isinstance(json_data, dict):
+        structure_info = f"**Tipo:** dict con {len(json_data)} campos\n"
+        structure_info += f"**Campos raíz:** {', '.join(list(json_data.keys())[:10])}\n"
+        
+        if 'matchData' in json_data:
+            match_core = json_data['matchData']
+            structure_info += f"**matchData:** ✅ dict con {len(match_core)} campos\n"
+            structure_info += f"**matchData campos:** {', '.join(list(match_core.keys())[:8])}\n"
+        else:
+            structure_info += f"**matchData:** ❌ No encontrado\n"
+            match_core = json_data
+        
+        embed.add_field(
+            name="📋 1. Estructura JSON",
+            value=structure_info,
+            inline=False
+        )
+        
+        # Paso 2: matchInfo
+        match_info = match_core.get('matchInfo', {})
+        if match_info:
+            info_details = f"**Campos matchInfo:** {len(match_info)}\n"
+            
+            # Tiempo
+            time_fields = []
+            for field in ['currentTime', 'matchTime', 'gameTime', 'startTime', 'endTime']:
+                if field in match_info:
+                    time_fields.append(f"{field}={match_info[field]}")
+            
+            info_details += f"**Tiempo:** {', '.join(time_fields) if time_fields else 'No encontrado'}\n"
+            
+            # Período
+            period_fields = []
+            for field in ['period', 'currentPeriod', 'lastPeriodName']:
+                if field in match_info:
+                    period_fields.append(f"{field}='{match_info[field]}'")
+            
+            info_details += f"**Período:** {', '.join(period_fields) if period_fields else 'No encontrado'}\n"
+            
+            # Mapa
+            map_name = match_info.get('mapName', match_info.get('map', 'N/A'))
+            info_details += f"**Mapa:** {map_name}\n"
+            
+        else:
+            info_details = "❌ matchInfo no encontrado"
+        
+        embed.add_field(
+            name="⏰ 2. Información del Partido",
+            value=info_details,
+            inline=False
+        )
+        
+        # Paso 3: Equipos
+        teams = match_core.get('teams', [])
+        if teams:
+            teams_info = f"**Cantidad equipos:** {len(teams)}\n"
+            
+            for i, team in enumerate(teams[:2]):
+                team_name = team.get('name', team.get('teamName', f'Equipo {i+1}'))
+                
+                # Buscar goles en diferentes campos
+                goals = 0
+                if 'goals' in team:
+                    goals = team['goals']
+                elif 'score' in team:
+                    goals = team['score']
+                elif 'matchTotal' in team:
+                    stats = team.get('matchTotal', {}).get('statistics', [])
+                    if len(stats) > 12:
+                        goals = stats[12]
+                
+                teams_info += f"**{team_name}:** {goals} goles\n"
+        else:
+            teams_info = "❌ teams no encontrado"
+        
+        embed.add_field(
+            name="⚽ 3. Equipos y Marcador",
+            value=teams_info,
+            inline=False
+        )
+        
+        # Paso 4: Jugadores
+        players = match_core.get('players', [])
+        if players:
+            real_players = count_real_players(players)
+            players_info = f"**Total jugadores:** {len(players)}\n"
+            players_info += f"**Jugadores reales:** {real_players}\n"
+            
+            # Mostrar algunos ejemplos
+            for i, player in enumerate(players[:3]):
+                if 'info' in player:
+                    player_info = player['info']
+                else:
+                    player_info = player
+                
+                name = player_info.get('name', 'Unknown')
+                steam_id = player_info.get('steamId', 'N/A')
+                players_info += f"**{name}:** {steam_id}\n"
+        else:
+            players_info = "❌ players no encontrado"
+        
+        embed.add_field(
+            name="👥 4. Jugadores",
+            value=players_info,
+            inline=False
+        )
+        
+        # Paso 5: Resultado del parsing
+        parsed_info = parse_match_info(json_data)
+        if parsed_info:
+            parse_result = f"✅ **Parsing exitoso**\n"
+            parse_result += f"**Marcador:** {parsed_info['team_home']} {parsed_info['goals_home']}-{parsed_info['goals_away']} {parsed_info['team_away']}\n"
+            parse_result += f"**Tiempo:** {parsed_info['time_display']} ({parsed_info['period']})\n"
+            parse_result += f"**Jugadores:** {parsed_info['players_count']}/{parsed_info['max_players']}\n"
+        else:
+            parse_result = "❌ **Parsing falló**"
+        
+        embed.add_field(
+            name="🎯 5. Resultado Final",
+            value=parse_result,
+            inline=False
+        )
+    
+    await message.edit(embed=embed)
+
 @bot.command(name='fix_guide')
 async def rcon_fix_guide(ctx):
     """Guía para configurar RCON correctamente"""
@@ -1466,17 +1891,19 @@ async def ping_command(ctx):
 async def help_command(ctx):
     """Ayuda del bot"""
     embed = discord.Embed(
-        title="🤖 Bot IOSoccer con Match Info JSON",
-        description="Bot mejorado con información detallada de partidos",
+        title="🤖 Bot IOSoccer con Match Info JSON - VERSIÓN CORREGIDA",
+        description="Bot mejorado con información detallada de partidos y debugging avanzado",
         color=0x0099ff
     )
     
     commands_help = [
         ("🎮 !status", "Estado completo de todos los servidores con info de partidos"),
         ("⚽ !server [1-2]", "Información detallada de un servidor específico"),
-        ("📋 !matchjson [1-2]", "JSON completo del partido en curso"),
+        ("📋 !matchjson [1-2]", "JSON completo del partido con análisis"),
+        ("🔍 !debug_parse [1-2]", "(Admin) Debug paso a paso del parsing"),
         ("🔧 !rcon [1-2] [comando]", "(Admin) Ejecuta comando RCON específico"),
         ("🧪 !test_all_commands [1-2]", "(Admin) Prueba todos los comandos IOSoccer"),
+        ("🔍 !diagnose", "(Admin) Diagnóstico completo del sistema"),
         ("🛠️ !fix_guide", "Guía para configurar RCON correctamente"),
         ("🏓 !ping", "Latencia del bot"),
     ]
@@ -1486,11 +1913,17 @@ async def help_command(ctx):
     
     embed.add_field(
         name="📊 Información Mostrada",
-        value="• Marcador en tiempo real\n• Tiempo de juego\n• Equipos y jugadores\n• Estado del partido\n• Información de conexión",
+        value="• Marcador en tiempo real ✅\n• Tiempo de juego preciso ✅\n• Equipos y jugadores ✅\n• Estado del partido ✅\n• Goles detallados ✅\n• Información de conexión ✅",
         inline=False
     )
     
-    embed.set_footer(text="🔧 Versión mejorada con sv_matchinfojson")
+    embed.add_field(
+        name="🆕 Mejoras en esta versión",
+        value="• Parsing mejorado del JSON\n• Manejo robusto de diferentes estructuras\n• Debug tools avanzadas\n• Tiempo real corregido\n• Mejor detección de equipos y goles",
+        inline=False
+    )
+    
+    embed.set_footer(text="🔧 Versión corregida con parsing mejorado y debugging")
     
     await ctx.send(embed=embed)
 
@@ -1510,10 +1943,11 @@ async def on_command_error(ctx, error):
 # ============= EJECUTAR BOT =============
 
 if __name__ == "__main__":
-    print("🚀 Iniciando Bot IOSoccer con Match Info JSON")
-    print("🔧 Versión mejorada con información detallada de partidos")
-    print("📡 Usando sv_matchinfojson para datos en tiempo real")
-    print("⚽ Mostrando marcadores, tiempos, equipos y jugadores")
+    print("🚀 Iniciando Bot IOSoccer con Match Info JSON - VERSIÓN CORREGIDA")
+    print("🔧 Parsing mejorado para tiempo real y marcadores")
+    print("📡 Manejo robusto de diferentes estructuras JSON")
+    print("⚽ Mostrando marcadores, tiempos, equipos y jugadores correctamente")
+    print("🔍 Herramientas de debugging avanzadas incluidas")
     print("="*60)
     
     try:
