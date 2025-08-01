@@ -7,7 +7,7 @@ from datetime import datetime
 import re
 import json
 import time
-from rcon.source import Client
+from rcon import Client
 import logging
 import os
 
