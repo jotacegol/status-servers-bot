@@ -872,7 +872,7 @@ async def server_status(ctx):
         )
         await message.edit(embed=loading_embed)
         
-        server_info = await get_server_info(server)
+        server_info = await get_server_info_robust(server)
         servers_info.append(server_info)
         
         # Limpiar field para próxima iteración
@@ -908,7 +908,7 @@ async def individual_server(ctx, server_num: int = 1):
     )
     message = await ctx.send(embed=loading_embed)
     
-    server_info = await get_server_info(server)
+    server_info = await get_server_info_robust(server)
     match_embed = create_match_embed(server_info)
     
     await message.edit(embed=match_embed)
