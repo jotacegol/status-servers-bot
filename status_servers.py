@@ -984,7 +984,7 @@ def create_status_embed(servers_info):
 
 # ============= FUNCIÓN DE AUTO-UPDATE =============
 
-async def auto_update_status(channel, messages, initial_servers_info):
+async def auto_update_status_detailed (channel, messages, initial_servers_info):
     """Función que actualiza automáticamente TODOS los mensajes (resumen + detalles)"""
     update_count = 0
     
