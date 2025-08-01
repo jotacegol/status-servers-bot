@@ -1374,7 +1374,7 @@ async def server_status(ctx):
     
     # Luego mostrar cada servidor individualmente con detalles
     for server_info in servers_info:
-        match_embed = create_match_embed(server_info)
+        match_embed = create_match_embed_improved(server_info)
         await ctx.send(embed=match_embed)
 
 @bot.command(name='server')
@@ -1394,7 +1394,7 @@ async def individual_server(ctx, server_num: int = 1):
     message = await ctx.send(embed=loading_embed)
     
     server_info = await get_server_info_robust(server)
-    match_embed = create_match_embed(server_info)
+    match_embed = create_match_embed_improved(server_info)
     
     await message.edit(embed=match_embed)
 
