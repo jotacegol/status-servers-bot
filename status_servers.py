@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import asyncio
 import socket
 import struct
@@ -10,6 +10,10 @@ import time
 from rcon import Client
 import logging
 import os
+
+# ============= CONFIGURACIÓN GLOBAL PARA AUTO-UPDATE =============
+active_status_channels = {}  # Diccionario para rastrear canales con auto-update activo
+# Estructura: {channel_id: {'message': message_object, 'task': task_object}}
 
 # Cambiar estas líneas:
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -978,6 +982,60 @@ def create_status_embed(servers_info):
     
     return embed
 
+# ============= FUNCIÓN DE AUTO-UPDATE =============
+
+async def auto_update_status(channel, original_message):
+    """Función que actualiza automáticamente el status cada 30 segundos"""
+    update_count = 0
+    max_updates = 120  # Máximo 60 minutos (120 updates × 30s = 3600s)
+    
+    try:
+        while update_count < max_updates:
+            await asyncio.sleep(30)  # Esperar 30 segundos
+            update_count += 1
+            
+            logger.info(f"🔄 Auto-update #{update_count} para canal {channel.id}")
+            
+            # Obtener información actualizada de todos los servidores
+            servers_info = []
+            for server in SERVERS:
+                server_info = await get_server_info_robust(server)
+                servers_info.append(server_info)
+            
+            # Crear embed actualizado
+            status_embed = create_status_embed(servers_info)
+            
+            # Agregar indicador de auto-update
+            status_embed.set_footer(
+                text=f"🔄 Auto-actualización #{update_count}/120 | Próxima actualización en 30s | {datetime.now().strftime('%H:%M:%S')}"
+            )
+            
+            # Actualizar el mensaje existente
+            try:
+                await original_message.edit(embed=status_embed)
+                logger.info(f"✅ Auto-update #{update_count} completado exitosamente")
+            except discord.NotFound:
+                logger.warning(f"⚠️ Mensaje eliminado, deteniendo auto-update para canal {channel.id}")
+                break
+            except discord.Forbidden:
+                logger.warning(f"⚠️ Sin permisos para editar mensaje, deteniendo auto-update")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error en auto-update #{update_count}: {e}")
+                # Continuar con el siguiente update
+        
+        logger.info(f"🏁 Auto-update completado para canal {channel.id} (máximo alcanzado)")
+    
+    except asyncio.CancelledError:
+        logger.info(f"🛑 Auto-update cancelado para canal {channel.id}")
+    except Exception as e:
+        logger.error(f"❌ Error fatal en auto-update: {e}")
+    finally:
+        # Limpiar el registro del canal
+        if channel.id in active_status_channels:
+            del active_status_channels[channel.id]
+        logger.info(f"🧹 Auto-update limpiado para canal {channel.id}")
+
 # Función mejorada para obtener información del servidor
 async def get_server_info_robust(server):
     """Obtiene información completa del servidor con manejo robusto de errores - VERSIÓN CORREGIDA"""
@@ -1160,6 +1218,8 @@ async def on_ready():
     logger.info(f"🛡️ Modo seguro: Solo puertos específicos por servidor")
     logger.info(f"🎯 Parsing mejorado para tiempo real y marcadores")
     logger.info("="*60)
+    active_status_channels.clear()
+logger.info("🧹 Auto-updates previos limpiados al iniciar")
 
 # Comando para diagnóstico completo
 @bot.command(name='diagnose')
@@ -1251,8 +1311,30 @@ async def diagnose_system(ctx):
     await message.edit(embed=embed)
 
 @bot.command(name='status')
-async def server_status(ctx):
-    """Estado de todos los servidores con información detallada de partidos - VERSIÓN CORREGIDA"""
+async def server_status(ctx, auto_update: str = None):
+    """
+    Estado de todos los servidores con información detallada de partidos
+    Uso: !status o !status auto (para activar actualización automática)
+    """
+    # Verificar si ya hay auto-update activo en este canal
+    if ctx.channel.id in active_status_channels:
+        # Cancelar el auto-update existente
+        existing_task = active_status_channels[ctx.channel.id].get('task')
+        if existing_task and not existing_task.cancelled():
+            existing_task.cancel()
+        
+        # Eliminar mensaje anterior si existe
+        try:
+            old_message = active_status_channels[ctx.channel.id].get('message')
+            if old_message:
+                await old_message.delete()
+        except:
+            pass  # Ignorar errores al eliminar mensaje anterior
+        
+        del active_status_channels[ctx.channel.id]
+        logger.info(f"🔄 Auto-update anterior cancelado para canal {ctx.channel.id}")
+    
+    # Mensaje de carga inicial
     loading_embed = discord.Embed(
         title="🔄 Consultando servidores...",
         description="Obteniendo información A2S + Match Info JSON",
@@ -1260,8 +1342,8 @@ async def server_status(ctx):
     )
     message = await ctx.send(embed=loading_embed)
     
+    # Obtener información de todos los servidores
     servers_info = []
-    
     for i, server in enumerate(SERVERS):
         loading_embed.description = f"Analizando {server['name']} ({i+1}/{len(SERVERS)})"
         loading_embed.add_field(
@@ -1283,14 +1365,77 @@ async def server_status(ctx):
         # Limpiar field para próxima iteración
         loading_embed.clear_fields()
     
-    # Mostrar resumen general primero
+    # Crear embed de status principal
     status_embed = create_status_embed(servers_info)
-    await message.edit(embed=status_embed)
     
-    # Luego mostrar cada servidor individualmente con detalles
-    for server_info in servers_info:
-        match_embed = create_match_embed_improved(server_info)
-        await ctx.send(embed=match_embed)
+    # Verificar si se solicitó auto-update
+    if auto_update and auto_update.lower() in ['auto', 'automatico', 'continuo']:
+        # Activar auto-update
+        status_embed.set_footer(
+            text=f"🔄 Auto-actualización ACTIVADA | Actualiza cada 30s | {datetime.now().strftime('%H:%M:%S')}"
+        )
+        
+        await message.edit(embed=status_embed)
+        
+        # Iniciar tarea de auto-update
+        task = asyncio.create_task(auto_update_status(ctx.channel, message))
+        
+        # Registrar el canal y la tarea
+        active_status_channels[ctx.channel.id] = {
+            'message': message,
+            'task': task
+        }
+        
+        logger.info(f"🔄 Auto-update INICIADO para canal {ctx.channel.id}")
+        
+        # Enviar mensaje de confirmación que se auto-elimine
+        confirm_msg = await ctx.send("✅ **Auto-actualización activada!** El status se actualizará cada 30 segundos durante 60 minutos.")
+        await asyncio.sleep(5)
+        try:
+            await confirm_msg.delete()
+        except:
+            pass
+    else:
+        # Status normal sin auto-update
+        await message.edit(embed=status_embed)
+    
+    # Mostrar detalles individuales de cada servidor (solo en modo normal)
+    if not (auto_update and auto_update.lower() in ['auto', 'automatico', 'continuo']):
+        for server_info in servers_info:
+            match_embed = create_match_embed_improved(server_info)
+            await ctx.send(embed=match_embed)
+            
+@bot.command(name='stop_status')
+async def stop_auto_status(ctx):
+    """Detiene la actualización automática del status en este canal"""
+    if ctx.channel.id not in active_status_channels:
+        await ctx.send("❌ No hay auto-actualización activa en este canal.")
+        return
+    
+    # Cancelar la tarea
+    task = active_status_channels[ctx.channel.id].get('task')
+    if task and not task.cancelled():
+        task.cancel()
+    
+    # Limpiar registro
+    del active_status_channels[ctx.channel.id]
+    
+    embed = discord.Embed(
+        title="🛑 Auto-actualización detenida",
+        description="La actualización automática del status ha sido desactivada para este canal.",
+        color=0xff6600
+    )
+    
+    message = await ctx.send(embed=embed)
+    
+    # Auto-eliminar el mensaje de confirmación después de 5 segundos
+    await asyncio.sleep(5)
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    logger.info(f"🛑 Auto-update detenido manualmente para canal {ctx.channel.id}")
 
 @bot.command(name='server')
 async def individual_server(ctx, server_num: int = 1):
@@ -1827,16 +1972,18 @@ async def help_command(ctx):
     )
     
     commands_help = [
-        ("🎮 !status", "Estado completo de todos los servidores con info de partidos"),
-        ("⚽ !server [1-2]", "Información detallada de un servidor específico"),
-        ("📋 !matchjson [1-2]", "JSON completo del partido con análisis"),
-        ("🔍 !debug_parse [1-2]", "(Admin) Debug paso a paso del parsing"),
-        ("🔧 !rcon [1-2] [comando]", "(Admin) Ejecuta comando RCON específico"),
-        ("🧪 !test_all_commands [1-2]", "(Admin) Prueba todos los comandos IOSoccer"),
-        ("🔍 !diagnose", "(Admin) Diagnóstico completo del sistema"),
-        ("🛠️ !fix_guide", "Guía para configurar RCON correctamente"),
-        ("🏓 !ping", "Latencia del bot"),
-    ]
+    ("🎮 !status", "Estado de todos los servidores"),
+    ("🔄 !status auto", "Status con auto-actualización cada 30s (60 min)"),
+    ("🛑 !stop_status", "Detener auto-actualización del status"),
+    ("⚽ !server [1-2]", "Información detallada de un servidor específico"),
+    ("📋 !matchjson [1-2]", "JSON completo del partido con análisis"),
+    ("🔍 !debug_parse [1-2]", "(Admin) Debug paso a paso del parsing"),
+    ("🔧 !rcon [1-2] [comando]", "(Admin) Ejecuta comando RCON específico"),
+    ("🧪 !test_all_commands [1-2]", "(Admin) Prueba todos los comandos IOSoccer"),
+    ("🔍 !diagnose", "(Admin) Diagnóstico completo del sistema"),
+    ("🛠️ !fix_guide", "Guía para configurar RCON correctamente"),
+    ("🏓 !ping", "Latencia del bot"),
+]
     
     for name, description in commands_help:
         embed.add_field(name=name, value=description, inline=False)
