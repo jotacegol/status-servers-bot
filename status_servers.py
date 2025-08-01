@@ -425,173 +425,116 @@ class RCONManager:
 
 def parse_match_info(match_data):
     """
-    Parsea la información del partido desde el JSON COMPLETO - VERSIÓN CORREGIDA
-    Returns: dict con información organizada incluyendo goles detallados
+    Parsea la información del partido desde el JSON REAL - VERSIÓN CORREGIDA PARA TU SERVIDOR
     """
     if not match_data:
         logger.warning("⚠️ parse_match_info: match_data es None o vacío")
         return None
     
     try:
-        logger.info(f"🔍 Parseando match data con {len(match_data)} campos principales")
+        logger.info(f"🔍 Parseando match data REAL con {len(match_data)} campos")
         
-        # Debug: Mostrar estructura del JSON
-        if 'matchData' in match_data:
-            match_core = match_data['matchData']
-            logger.info(f"📊 matchData encontrado con campos: {list(match_core.keys())}")
-        else:
-            logger.warning("⚠️ No se encontró 'matchData' en el JSON")
-            # Intentar usar el JSON directamente si no hay wrapper matchData
-            match_core = match_data
+        # TU JSON TIENE ESTRUCTURA DIRECTA, NO HAY 'matchData' wrapper
         
-        # Obtener información básica del partido
-        match_info = match_core.get('matchInfo', {})
-        teams = match_core.get('teams', [])
-        players = match_core.get('players', [])
-        events = match_core.get('matchEvents', [])
+        # TIEMPO DEL PARTIDO - DESDE TU JSON
+        current_time_seconds = match_data.get('matchSeconds', 0)
+        time_display = match_data.get('matchDisplaySeconds', '0:00')
+        period_name = match_data.get('matchPeriod', 'N/A')
         
-        logger.info(f"📋 Datos encontrados: matchInfo={len(match_info)}, teams={len(teams)}, players={len(players)}, events={len(events)}")
+        logger.info(f"⏰ Tiempo desde JSON: {time_display} ({current_time_seconds}s) en período '{period_name}'")
         
-        # TIEMPO DEL PARTIDO CORREGIDO
-        current_time_seconds = 0
-        period_name = "N/A"
+        # NOMBRES DE EQUIPOS - DESDE TU JSON
+        team_home_name = match_data.get('teamNameHome', 'Local')
+        team_away_name = match_data.get('teamNameAway', 'Visitante')
         
-        # NUEVO: Obtener el tiempo más reciente desde los eventos o matchInfo
-        if events:
-            # Buscar el evento más reciente para obtener el tiempo actual
-            latest_event = max(events, key=lambda x: x.get('second', 0))
-            current_time_seconds = latest_event.get('second', 0)
-            logger.info(f"⏰ Tiempo desde último evento: {current_time_seconds}s")
+        # GOLES - DESDE TU JSON
+        goals_home = match_data.get('matchGoalsHome', 0)
+        goals_away = match_data.get('matchGoalsAway', 0)
         
-        # Obtener período desde matchInfo
-        if 'lastPeriodName' in match_info:
-            period_name = match_info['lastPeriodName']
-        elif 'currentPeriod' in match_info:
-            period_name = match_info['currentPeriod']
-        elif 'period' in match_info:
-            period_name = match_info['period']
+        logger.info(f"⚽ Marcador desde JSON: {team_home_name} {goals_home} - {goals_away} {team_away_name}")
         
-        # Si el partido terminó, usar endTime si está disponible
-        if match_info.get('endTime') and period_name in ['FULL TIME', 'FINISHED']:
-            # Calcular duración total del partido
-            start_time = match_info.get('startTime', 0)
-            end_time = match_info.get('endTime', 0)
-            if start_time and end_time:
-                total_duration = end_time - start_time
-                current_time_seconds = min(current_time_seconds, total_duration)
+        # JUGADORES ACTIVOS - DESDE TU JSON
+        active_players_count = match_data.get('serverPlayerCount', 0)
+        max_players_total = match_data.get('serverMaxPlayers', 16)
         
-        # Convertir segundos a formato MM:SS
-        if current_time_seconds > 0:
-            minutes = int(current_time_seconds // 60)
-            seconds = int(current_time_seconds % 60)
-            time_display = f"{minutes}:{seconds:02d}"
-        else:
-            time_display = "0:00"
+        # FORMATO DEL PARTIDO - DESDE TU JSON
+        match_format = match_data.get('matchFormat', 6)
+        format_display = f"{match_format}v{match_format}"
         
-        logger.info(f"⏰ Tiempo parseado: {time_display} ({current_time_seconds}s) en período '{period_name}'")
+        # MAPA - DESDE TU JSON
+        map_name = match_data.get('mapName', 'N/A')
         
-        # ========== CORRECCIÓN PRINCIPAL: NOMBRES DE EQUIPOS ==========
-        team_home_name = "Local"
-        team_away_name = "Visitante"
-        goals_home = 0
-        goals_away = 0
+        # EVENTOS Y GOLES DETALLADOS - DESDE TU JSON
+        events = match_data.get('matchEvents', [])
+        goals_detail = parse_goals_from_real_events(events)
         
-        if len(teams) >= 2:
-            # NUEVO: Extraer nombres de equipos desde matchTotal
-            home_team_data = teams[0]
-            away_team_data = teams[1]
-            
-            # Los nombres están en matchTotal.name, NO en name directamente
-            if 'matchTotal' in home_team_data and 'name' in home_team_data['matchTotal']:
-                team_home_name = home_team_data['matchTotal']['name']
-            elif 'name' in home_team_data:
-                team_home_name = home_team_data['name']
-            
-            if 'matchTotal' in away_team_data and 'name' in away_team_data['matchTotal']:
-                team_away_name = away_team_data['matchTotal']['name']
-            elif 'name' in away_team_data:
-                team_away_name = away_team_data['name']
-            
-            # NUEVO: Extraer goles desde matchTotal.statistics[12]
-            # En IOSoccer, el índice 12 de las estadísticas corresponde a los goles
-            if 'matchTotal' in home_team_data and 'statistics' in home_team_data['matchTotal']:
-                home_stats = home_team_data['matchTotal']['statistics']
-                if len(home_stats) > 12:
-                    goals_home = home_stats[12]  # Índice 12 = goles
-            
-            if 'matchTotal' in away_team_data and 'statistics' in away_team_data['matchTotal']:
-                away_stats = away_team_data['matchTotal']['statistics']
-                if len(away_stats) > 12:
-                    goals_away = away_stats[12]  # Índice 12 = goles
-            
-            # Fallback: buscar en campos alternativos
-            if goals_home == 0 and 'goals' in home_team_data:
-                goals_home = home_team_data['goals']
-            if goals_away == 0 and 'goals' in away_team_data:
-                goals_away = away_team_data['goals']
+        # LINEUPS - DESDE TU JSON
+        lineup_home = match_data.get('teamLineupHome', [])
+        lineup_away = match_data.get('teamLineupAway', [])
         
-        logger.info(f"⚽ Marcador parseado: {team_home_name} {goals_home} - {goals_away} {team_away_name}")
+        logger.info(f"🎯 Información REAL parseada: {active_players_count} jugadores, {len(goals_detail)} goles")
         
-        # JUGADORES ACTIVOS CORREGIDO
-        active_players_count = count_real_players(players)
-        
-        # Determinar máximo de jugadores basado en el formato
-        format_str = match_info.get('format', 8)  # Por defecto 8v8
-        if isinstance(format_str, int):
-            max_players_estimated = format_str * 2  # Si format es 8, entonces 8v8 = 16 jugadores
-        else:
-            max_players_estimated = 16  # Fallback
-        
-        # INFORMACIÓN DEL MAPA
-        map_name = match_info.get('mapName', 'N/A')
-        
-        # EVENTOS Y GOLES DETALLADOS - MEJORADO
-        goals_detail = parse_goals_from_events_improved(events, players, teams)
-        
-        logger.info(f"🎯 Información completa parseada: {active_players_count} jugadores, {len(goals_detail)} goles")
-        
-        # Información básica
+        # INFORMACIÓN COMPLETA
         info = {
             'period': period_name,
             'time_display': time_display,
             'time_seconds': current_time_seconds,
             'map_name': map_name,
-            'format': f"{format_str}v{format_str}" if isinstance(format_str, int) else str(format_str),
-            'match_type': match_info.get('type', 'N/A'),
-            'server_name': match_info.get('serverName', 'N/A'),
+            'format': format_display,
+            'match_type': 'IOSoccer Match',
+            'server_name': 'IOSoccer Server',
             
-            # Información de equipos - CORREGIDA
+            # EQUIPOS - NOMBRES REALES
             'team_home': team_home_name,
             'team_away': team_away_name,
             'goals_home': goals_home,
             'goals_away': goals_away,
             
-            # Jugadores
+            # JUGADORES
             'players_count': active_players_count,
-            'max_players': max_players_estimated,
+            'max_players': max_players_total,
             
-            # Información detallada
-            'players': players,
+            # INFORMACIÓN DETALLADA
             'events': events,
             'goals_detail': goals_detail,
-            
-            # Para compatibilidad
-            'lineup_home': extract_team_players_improved(players, 'home', team_home_name),
-            'lineup_away': extract_team_players_improved(players, 'away', team_away_name),
-            
-            'match_stats': {
-                'home_stats': teams[0].get('matchTotal', {}).get('statistics', []) if len(teams) > 0 else [],
-                'away_stats': teams[1].get('matchTotal', {}).get('statistics', []) if len(teams) > 1 else []
-            }
+            'lineup_home': lineup_home,
+            'lineup_away': lineup_away,
         }
         
-        logger.info(f"✅ Match info parseado exitosamente: {info['team_home']} vs {info['team_away']}")
+        logger.info(f"✅ Match info REAL parseado: {info['team_home']} vs {info['team_away']}")
         return info
         
     except Exception as e:
-        logger.error(f"❌ Error parsing match info completo: {e}")
-        logger.error(f"❌ Estructura del JSON recibido: {list(match_data.keys()) if isinstance(match_data, dict) else type(match_data)}")
+        logger.error(f"❌ Error parsing match info REAL: {e}")
         return None
+def parse_goals_from_real_events(events):
+    """
+    Parsea goles desde TU estructura real de eventos
+    """
+    if not events:
+        return []
+    
+    goals = []
+    
+    for event in events:
+        if event.get('event') == 'GOAL':
+            goal_time_seconds = event.get('second', 0)
+            
+            goal_info = {
+                'minute': seconds_to_minutes(goal_time_seconds),
+                'period': event.get('period', 'N/A'),
+                'team': event.get('team', 'unknown'),
+                'team_name': 'Local' if event.get('team') == 'home' else 'Visitante',
+                'scorer_id': event.get('player1SteamId', ''),
+                'scorer_name': event.get('player1Name', 'Unknown'),
+                'assist_id': event.get('player2SteamId', ''),
+                'assist_name': event.get('player2Name', ''),
+                'body_part': event.get('bodyPart', 1),
+                'position': event.get('startPosition', {})
+            }
+            goals.append(goal_info)
+    
+    return goals
 
 def count_real_players(players):
     """
@@ -838,7 +781,7 @@ def get_active_players(lineup):
     return active_players
 
 def create_match_embed_improved(server_info):
-    """Crea embed detallado con información del partido - VERSIÓN MEJORADA CON NOMBRES REALES"""
+    """Crea embed detallado con información del partido - VERSIÓN PARA TU JSON REAL"""
     if not server_info.match_info:
         # Embed simple sin información de partido
         embed = discord.Embed(
@@ -871,18 +814,18 @@ def create_match_embed_improved(server_info):
     
     # Color según el estado del partido
     period = match_info['period'].upper()
-    if period in ['FIRST HALF', 'FIRST_HALF', '1ST HALF', 'PLAYING']:
+    if 'FIRST' in period:
         color = 0x00ff00  # Verde - Primer tiempo
-    elif period in ['SECOND HALF', 'SECOND_HALF', '2ND HALF']:
+    elif 'SECOND' in period:
         color = 0x00aa00  # Verde más oscuro - Segundo tiempo
-    elif period in ['HALF TIME', 'HALF_TIME', 'HALFTIME']:
+    elif 'HALF TIME' in period:
         color = 0xffa500  # Naranja - Descanso
-    elif period in ['FULL TIME', 'FULL_TIME', 'FINISHED', 'END']:
+    elif 'FULL TIME' in period or 'FINISHED' in period:
         color = 0x888888  # Gris - Partido terminado
     else:
         color = 0x0099ff  # Azul - Otro estado
     
-    # TÍTULO MEJORADO con nombres reales de equipos
+    # TÍTULO CON NOMBRES REALES DE EQUIPOS
     embed = discord.Embed(
         title=f"⚽ {server_info.name} - {match_info['format']}",
         description=f"**{match_info['team_home']}** vs **{match_info['team_away']}**",
@@ -902,11 +845,11 @@ def create_match_embed_improved(server_info):
         inline=False
     )
     
-    # MARCADOR PRINCIPAL con nombres reales de equipos
+    # MARCADOR PRINCIPAL CON NOMBRES REALES
     score_text = f"**{match_info['team_home']} {match_info['goals_home']} - {match_info['goals_away']} {match_info['team_away']}**"
     
     # Emoji según el período
-    period_emoji = "⚽" if period in ['FIRST HALF', 'SECOND HALF', 'PLAYING'] else "⏸️" if period == 'HALF TIME' else "🏁" if period in ['FULL TIME', 'FINISHED'] else "📅"
+    period_emoji = "⚽" if 'FIRST' in period or 'SECOND' in period else "⏸️" if 'HALF TIME' in period else "🏁" if 'FULL TIME' in period else "📅"
     
     embed.add_field(
         name="🏆 Marcador",
@@ -915,7 +858,7 @@ def create_match_embed_improved(server_info):
         inline=False
     )
     
-    # Goles detallados por equipo con nombres reales
+    # GOLES DETALLADOS POR EQUIPO
     if match_info.get('goals_detail'):
         home_goals = [goal for goal in match_info['goals_detail'] if goal['team'] == 'home']
         away_goals = [goal for goal in match_info['goals_detail'] if goal['team'] == 'away']
@@ -927,10 +870,10 @@ def create_match_embed_improved(server_info):
                 assist_text = f" ({goal['assist_name']})" if goal['assist_name'] else ""
                 home_goals_text += f"⚽ **{goal['minute']}** {goal['scorer_name']}{assist_text}\n"
         else:
-            home_goals_text = "Sin goles"
+            home_goals_text = f"**{match_info['goals_home']} goles**" if match_info['goals_home'] > 0 else "Sin goles"
         
         embed.add_field(
-            name=f"🥅 Goles {match_info['team_home']}",
+            name=f"🥅 {match_info['team_home']}",
             value=home_goals_text.strip(),
             inline=True
         )
@@ -942,29 +885,29 @@ def create_match_embed_improved(server_info):
                 assist_text = f" ({goal['assist_name']})" if goal['assist_name'] else ""
                 away_goals_text += f"⚽ **{goal['minute']}** {goal['scorer_name']}{assist_text}\n"
         else:
-            away_goals_text = "Sin goles"
+            away_goals_text = f"**{match_info['goals_away']} goles**" if match_info['goals_away'] > 0 else "Sin goles"
         
         embed.add_field(
-            name=f"🥅 Goles {match_info['team_away']}",
+            name=f"🥅 {match_info['team_away']}",
             value=away_goals_text.strip(),
             inline=True
         )
         
-        # Campo vacío para hacer nueva línea
+        # Espacio para nueva línea
         embed.add_field(name="\u200b", value="\u200b", inline=True)
         
-        # Máximos goleadores
+        # Goleadores si hay goles
         if home_goals or away_goals:
+            all_goals = home_goals + away_goals
             scorer_count = {}
-            for goal in match_info['goals_detail']:
+            for goal in all_goals:
                 scorer = goal['scorer_name']
                 scorer_count[scorer] = scorer_count.get(scorer, 0) + 1
             
-            top_scorers = sorted(scorer_count.items(), key=lambda x: x[1], reverse=True)
-            
-            if top_scorers:
+            if scorer_count:
                 scorers_text = ""
                 medals = ["🥇", "🥈", "🥉"]
+                top_scorers = sorted(scorer_count.items(), key=lambda x: x[1], reverse=True)
                 
                 for i, (player_name, goal_count) in enumerate(top_scorers[:3]):
                     medal = medals[i] if i < 3 else "🏆"
@@ -972,12 +915,12 @@ def create_match_embed_improved(server_info):
                     scorers_text += f"{medal} **{player_name}** ({goal_count} {plural})\n"
                 
                 embed.add_field(
-                    name="🏆 Máximos Goleadores",
+                    name="🏆 Goleadores",
                     value=scorers_text.strip(),
                     inline=False
                 )
     else:
-        # Sin información de goles detallada
+        # Sin detalles de goles, mostrar solo números
         embed.add_field(
             name=f"🥅 {match_info['team_home']}",
             value=f"**{match_info['goals_home']} goles**",
@@ -990,7 +933,7 @@ def create_match_embed_improved(server_info):
             inline=True
         )
     
-    # Footer con información actualizada
+    # Footer
     embed.set_footer(text=f"🔄 Actualizado | {datetime.now().strftime('%H:%M:%S')}")
     
     return embed
