@@ -7,7 +7,7 @@ from datetime import datetime
 import re
 import json
 import time
-from rcon import Client
+from rcon.source import Client
 import logging
 import os
 
@@ -860,11 +860,30 @@ async def get_server_info_robust(server):
         match_info = None
         connection_details = match_result.get('connection_info', {})
         
-        if match_result['success'] and match_result['data'] and 'matchData' in match_result['data']:
-            match_info = parse_match_info(match_result['data'])
-            logger.info(f"✅ Match info obtenida para {server['name']} (puerto {match_result['working_port']})")
+        if match_result['success'] and match_result['data']:
+            if 'matchData' in match_result['data']:
+                match_info = parse_match_info(match_result['data'])
+                logger.info(f"✅ Match info completa obtenida para {server['name']} (puerto {match_result['working_port']})")
+            else:
+                logger.info(f"📄 JSON simple para {server['name']}, usando datos básicos")
+                match_info = {
+                    'period': 'N/A',
+                    'time_display': '0:00',
+                    'time_seconds': 0,
+                    'map_name': match_result['data'].get('mapName', 'N/A'),
+                    'format': '8v8',
+                    'players_count': 0,
+                    'max_players': 16,
+                    'team_home': 'Local',
+                    'team_away': 'Visitante', 
+                    'goals_home': 0,
+                    'goals_away': 0,
+                    'goals_detail': [],
+                    'lineup_home': [],
+                    'lineup_away': []
+                }
         else:
-            match_info = parse_match_info_simple(match_result['data'])
+            match_info = None
         
         return ServerInfo(
             name=server['name'],
@@ -882,6 +901,7 @@ async def get_server_info_robust(server):
             name=server['name'],
             status="🔴 Error General",
         )
+        
 def validate_server_config():
     """
     Valida que la configuración de servidores sea segura
