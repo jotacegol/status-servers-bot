@@ -46,13 +46,13 @@ SERVERS = [
         'name': 'Servidor IOSoccer #1',
         'ip': '45.235.98.16',
         'port': 27018,
-        'rcon_ports': [27018, 27015, 27019, 27020, 27021],
+        'rcon_ports': [27018],
     },
     {
         'name': 'Servidor IOSoccer #2', 
         'ip': '45.235.98.16',
         'port': 27019,
-        'rcon_ports': [27019, 27016, 27020, 27021, 27022],
+        'rcon_ports': [27019],
     }
 ]
 
