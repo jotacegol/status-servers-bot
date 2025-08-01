@@ -984,17 +984,16 @@ def create_status_embed(servers_info):
 
 # ============= FUNCIÓN DE AUTO-UPDATE =============
 
-async def auto_update_status(channel, original_message):
-    """Función que actualiza automáticamente el status cada 30 segundos"""
+async def auto_update_status(channel, messages, initial_servers_info):
+    """Función que actualiza automáticamente TODOS los mensajes (resumen + detalles)"""
     update_count = 0
-    max_updates = 120  # Máximo 60 minutos (120 updates × 30s = 3600s)
     
     try:
-        while update_count < max_updates:
-            await asyncio.sleep(30)  # Esperar 30 segundos
+        while True:  # Loop infinito
+            await asyncio.sleep(60)  # 1 minuto
             update_count += 1
             
-            logger.info(f"🔄 Auto-update #{update_count} para canal {channel.id}")
+            logger.info(f"🔄 Auto-update detallado #{update_count} para canal {channel.id}")
             
             # Obtener información actualizada de todos los servidores
             servers_info = []
@@ -1002,39 +1001,38 @@ async def auto_update_status(channel, original_message):
                 server_info = await get_server_info_robust(server)
                 servers_info.append(server_info)
             
-            # Crear embed actualizado
-            status_embed = create_status_embed(servers_info)
+            # Actualizar mensaje de resumen (primer mensaje)
+            if len(messages) > 0:
+                status_embed = create_status_embed(servers_info)
+                status_embed.set_footer(
+                    text=f"🔄 Auto-actualización #{update_count} | Próxima actualización en 1 minuto | {datetime.now().strftime('%H:%M:%S')}"
+                )
+                
+                try:
+                    await messages[0].edit(embed=status_embed)
+                except Exception as e:
+                    logger.error(f"❌ Error actualizando resumen: {e}")
             
-            # Agregar indicador de auto-update
-            status_embed.set_footer(
-                text=f"🔄 Auto-actualización #{update_count}/120 | Próxima actualización en 30s | {datetime.now().strftime('%H:%M:%S')}"
-            )
+            # Actualizar mensajes de detalles (resto de mensajes)
+            for i, server_info in enumerate(servers_info):
+                if i + 1 < len(messages):  # +1 porque el primer mensaje es el resumen
+                    match_embed = create_match_embed_improved(server_info)
+                    try:
+                        await messages[i + 1].edit(embed=match_embed)
+                    except Exception as e:
+                        logger.error(f"❌ Error actualizando detalle {server_info.name}: {e}")
             
-            # Actualizar el mensaje existente
-            try:
-                await original_message.edit(embed=status_embed)
-                logger.info(f"✅ Auto-update #{update_count} completado exitosamente")
-            except discord.NotFound:
-                logger.warning(f"⚠️ Mensaje eliminado, deteniendo auto-update para canal {channel.id}")
-                break
-            except discord.Forbidden:
-                logger.warning(f"⚠️ Sin permisos para editar mensaje, deteniendo auto-update")
-                break
-            except Exception as e:
-                logger.error(f"❌ Error en auto-update #{update_count}: {e}")
-                # Continuar con el siguiente update
-        
-        logger.info(f"🏁 Auto-update completado para canal {channel.id} (máximo alcanzado)")
+            logger.info(f"✅ Auto-update detallado #{update_count} completado")
     
     except asyncio.CancelledError:
-        logger.info(f"🛑 Auto-update cancelado para canal {channel.id}")
+        logger.info(f"🛑 Auto-update detallado cancelado para canal {channel.id}")
     except Exception as e:
-        logger.error(f"❌ Error fatal en auto-update: {e}")
+        logger.error(f"❌ Error fatal en auto-update detallado: {e}")
     finally:
         # Limpiar el registro del canal
         if channel.id in active_status_channels:
             del active_status_channels[channel.id]
-        logger.info(f"🧹 Auto-update limpiado para canal {channel.id}")
+        logger.info(f"🧹 Auto-update detallado limpiado para canal {channel.id}")
 
 # Función mejorada para obtener información del servidor
 async def get_server_info_robust(server):
@@ -1323,13 +1321,13 @@ async def server_status(ctx, auto_update: str = None):
         if existing_task and not existing_task.cancelled():
             existing_task.cancel()
         
-        # Eliminar mensaje anterior si existe
+        # Eliminar mensajes anteriores si existen
         try:
-            old_message = active_status_channels[ctx.channel.id].get('message')
-            if old_message:
+            old_messages = active_status_channels[ctx.channel.id].get('messages', [])
+            for old_message in old_messages:
                 await old_message.delete()
         except:
-            pass  # Ignorar errores al eliminar mensaje anterior
+            pass  # Ignorar errores al eliminar mensajes anteriores
         
         del active_status_channels[ctx.channel.id]
         logger.info(f"🔄 Auto-update anterior cancelado para canal {ctx.channel.id}")
@@ -1340,7 +1338,7 @@ async def server_status(ctx, auto_update: str = None):
         description="Obteniendo información A2S + Match Info JSON",
         color=0xffff00
     )
-    message = await ctx.send(embed=loading_embed)
+    loading_message = await ctx.send(embed=loading_embed)
     
     # Obtener información de todos los servidores
     servers_info = []
@@ -1351,7 +1349,7 @@ async def server_status(ctx, auto_update: str = None):
             value=f"{'✅ ' * i}{'🔄 ' if i < len(SERVERS) else ''}{'⏳ ' * (len(SERVERS) - i - 1)}",
             inline=False
         )
-        await message.edit(embed=loading_embed)
+        await loading_message.edit(embed=loading_embed)
         
         server_info = await get_server_info_robust(server)
         servers_info.append(server_info)
@@ -1365,6 +1363,9 @@ async def server_status(ctx, auto_update: str = None):
         # Limpiar field para próxima iteración
         loading_embed.clear_fields()
     
+    # Eliminar mensaje de carga
+    await loading_message.delete()
+    
     # Crear embed de status principal
     status_embed = create_status_embed(servers_info)
     
@@ -1372,24 +1373,35 @@ async def server_status(ctx, auto_update: str = None):
     if auto_update and auto_update.lower() in ['auto', 'automatico', 'continuo']:
         # Activar auto-update
         status_embed.set_footer(
-            text=f"🔄 Auto-actualización ACTIVADA | Actualiza cada 30s | {datetime.now().strftime('%H:%M:%S')}"
+            text=f"🔄 Auto-actualización ACTIVADA | Actualiza cada 1 minuto | {datetime.now().strftime('%H:%M:%S')}"
         )
         
-        await message.edit(embed=status_embed)
+        # ← CAMBIO IMPORTANTE: Enviar RESUMEN + DETALLES desde el inicio
+        summary_message = await ctx.send(embed=status_embed)
+        
+        # Enviar detalles de cada servidor
+        detail_messages = []
+        for server_info in servers_info:
+            match_embed = create_match_embed_improved(server_info)
+            detail_msg = await ctx.send(embed=match_embed)
+            detail_messages.append(detail_msg)
+        
+        # Registrar TODOS los mensajes para auto-update
+        all_messages = [summary_message] + detail_messages
         
         # Iniciar tarea de auto-update
-        task = asyncio.create_task(auto_update_status(ctx.channel, message))
+        task = asyncio.create_task(auto_update_status_detailed(ctx.channel, all_messages, servers_info))
         
         # Registrar el canal y la tarea
         active_status_channels[ctx.channel.id] = {
-            'message': message,
+            'messages': all_messages,
             'task': task
         }
         
-        logger.info(f"🔄 Auto-update INICIADO para canal {ctx.channel.id}")
+        logger.info(f"🔄 Auto-update INICIADO para canal {ctx.channel.id} con {len(all_messages)} mensajes")
         
         # Enviar mensaje de confirmación que se auto-elimine
-        confirm_msg = await ctx.send("✅ **Auto-actualización activada!** El status se actualizará cada 30 segundos durante 60 minutos.")
+        confirm_msg = await ctx.send("✅ **Auto-actualización activada!** El status se actualizará cada 1 minuto sin límite de tiempo.")
         await asyncio.sleep(5)
         try:
             await confirm_msg.delete()
@@ -1397,10 +1409,9 @@ async def server_status(ctx, auto_update: str = None):
             pass
     else:
         # Status normal sin auto-update
-        await message.edit(embed=status_embed)
-    
-    # Mostrar detalles individuales de cada servidor (solo en modo normal)
-    if not (auto_update and auto_update.lower() in ['auto', 'automatico', 'continuo']):
+        summary_message = await ctx.send(embed=status_embed)
+        
+        # Mostrar detalles individuales de cada servidor
         for server_info in servers_info:
             match_embed = create_match_embed_improved(server_info)
             await ctx.send(embed=match_embed)
