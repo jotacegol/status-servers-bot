@@ -417,11 +417,21 @@ def parse_match_info(match_data):
         players = match_data.get('matchData', {}).get('players', [])
         events = match_data.get('matchData', {}).get('matchEvents', [])
         
+        # Calcular tiempo actual del partido en formato MM:SS
+        start_time = match_info.get('startTime', 0)
+        end_time = match_info.get('endTime', 0)
+        total_seconds = end_time - start_time
+        
+        # Convertir a formato MM:SS
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        time_display = f"{minutes}:{seconds:02d}"
+        
         # Información básica
         info = {
             'period': match_info.get('lastPeriodName', 'N/A'),
-            'time_display': 'TERMINADO',  # Para partidos completos
-            'time_seconds': match_info.get('endTime', 0) - match_info.get('startTime', 0),
+            'time_display': time_display,  # Tiempo formateado
+            'time_seconds': total_seconds,
             'map_name': match_info.get('mapName', 'N/A'),
             'format': f"{match_info.get('format', 8)}v{match_info.get('format', 8)}",
             'match_type': match_info.get('type', 'N/A'),
@@ -433,10 +443,19 @@ def parse_match_info(match_data):
             'goals_home': teams[0].get('matchTotal', {}).get('statistics', [0]*28)[12] if len(teams) > 0 else 0,  # índice 12 = goles
             'goals_away': teams[1].get('matchTotal', {}).get('statistics', [0]*28)[12] if len(teams) > 1 else 0,
             
-            # Información de jugadores
+            # Contar jugadores (excluyendo bots)
+            'players_count': count_real_players(players),
+            'max_players': match_info.get('format', 8) * 2,  # Estimado basado en formato
+            
+            # Información de jugadores y eventos
             'players': players,
             'events': events,
             'goals_detail': parse_goals_from_events(events, players),
+            
+            # Para compatibilidad con la función original
+            'lineup_home': extract_team_players(players, 'home'),
+            'lineup_away': extract_team_players(players, 'away'),
+            
             'match_stats': {
                 'home_stats': teams[0].get('matchTotal', {}).get('statistics', []) if len(teams) > 0 else [],
                 'away_stats': teams[1].get('matchTotal', {}).get('statistics', []) if len(teams) > 1 else []
@@ -448,45 +467,51 @@ def parse_match_info(match_data):
     except Exception as e:
         logger.error(f"❌ Error parsing match info completo: {e}")
         return None
-def parse_match_info_simple(match_data):
+
+def count_real_players(players):
     """
-    Parsea información simple del JSON (versión de compatibilidad)
-    Para cuando el JSON no tiene la estructura completa 'matchData'
+    Cuenta solo los jugadores reales (no bots)
     """
-    if not match_data:
-        return None
+    real_players = 0
+    for player in players:
+        steam_id = player.get('info', {}).get('steamId', '')
+        if steam_id and steam_id != 'BOT' and steam_id != 'SourceTV':
+            real_players += 1
+    return real_players
+
+def extract_team_players(players, team_side):
+    """
+    Extrae jugadores de un equipo específico para compatibilidad
+    """
+    team_players = []
     
-    try:
-        # Esta es la estructura anterior que ya tenías funcionando
-        info = {
-            'period': match_data.get('matchPeriod', 'N/A'),
-            'time_display': match_data.get('matchDisplaySeconds', '0:00'),
-            'time_seconds': match_data.get('matchSeconds', 0),
-            'map_name': match_data.get('mapName', 'N/A'),
-            'format': f"{match_data.get('matchFormat', 0)}v{match_data.get('matchFormat', 0)}",
-            'players_count': match_data.get('serverPlayerCount', 0),
-            'max_players': match_data.get('serverMaxPlayers', 0),
-            
-            # Equipos y marcador
-            'team_home': match_data.get('teamNameHome', 'Local'),
-            'team_away': match_data.get('teamNameAway', 'Visitante'),
-            'code_home': match_data.get('teamCodeHome', 'LOC'),
-            'code_away': match_data.get('teamCodeAway', 'VIS'),
-            'goals_home': match_data.get('matchGoalsHome', 0),
-            'goals_away': match_data.get('matchGoalsAway', 0),
-            
-            # Lineup info
-            'lineup_home': match_data.get('teamLineupHome', []),
-            'lineup_away': match_data.get('teamLineupAway', []),
-            'events': match_data.get('matchEvents', []),
-            'goals_detail': []  # No hay información detallada en JSON simple
-        }
+    for player in players:
+        player_info = player.get('info', {})
+        steam_id = player_info.get('steamId', '')
+        name = player_info.get('name', 'Unknown')
         
-        return info
+        if steam_id == 'BOT' or steam_id == 'SourceTV' or not steam_id:
+            continue
+            
+        # Buscar la posición más reciente del jugador
+        periods = player.get('matchPeriodData', [])
+        if not periods:
+            continue
+            
+        # Obtener el último período jugado
+        last_period = periods[-1]
+        last_team = last_period.get('info', {}).get('team', '')
+        last_position = last_period.get('info', {}).get('position', 'N/A')
         
-    except Exception as e:
-        logger.error(f"❌ Error parsing match info simple: {e}")
-        return None
+        if last_team == team_side:
+            team_players.append({
+                'steamId': steam_id,
+                'name': name,
+                'position': last_position
+            })
+    
+    return team_players
+
 def parse_goals_from_events(events, players):
     """
     Extrae información detallada de goles desde los eventos
@@ -499,20 +524,23 @@ def parse_goals_from_events(events, players):
     for player in players:
         steam_id = player.get('info', {}).get('steamId', '')
         name = player.get('info', {}).get('name', 'Unknown')
-        if steam_id and steam_id != 'BOT':
+        if steam_id and steam_id != 'BOT' and steam_id != 'SourceTV':
             player_dict[steam_id] = name
     
     # Procesar eventos de goles
     for event in events:
         if event.get('event') == 'GOAL':
+            scorer_id = event.get('player1SteamId', '')
+            assist_id = event.get('player2SteamId', '')
+            
             goal_info = {
                 'minute': seconds_to_minutes(event.get('second', 0)),
                 'period': event.get('period', 'N/A'),
                 'team': event.get('team', 'N/A'),
-                'scorer_id': event.get('player1SteamId', ''),
-                'assist_id': event.get('player2SteamId', ''),
-                'scorer_name': player_dict.get(event.get('player1SteamId', ''), 'Unknown'),
-                'assist_name': player_dict.get(event.get('player2SteamId', ''), '') if event.get('player2SteamId') else '',
+                'scorer_id': scorer_id,
+                'assist_id': assist_id,
+                'scorer_name': player_dict.get(scorer_id, 'Unknown'),
+                'assist_name': player_dict.get(assist_id, '') if assist_id else '',
                 'body_part': event.get('bodyPart', 1),  # 1=pie, 4=cabeza
                 'position': event.get('startPosition', {})
             }
@@ -530,6 +558,7 @@ def seconds_to_minutes(seconds):
     minutes = seconds // 60
     remaining_seconds = seconds % 60
     return f"{minutes}:{remaining_seconds:02d}"
+
 def get_player_goals_stats(players, team_side):
     """
     Obtiene estadísticas de goles por jugador de un equipo específico
@@ -628,9 +657,8 @@ def create_match_embed(server_info):
         
         if "Online" in server_info.status:
             embed.add_field(
-                name="📊 Estado del Servidor",
-                value=f"**🎮 Estado:** {server_info.status}\n"
-                      f"**👥 Jugadores:** {server_info.players}/{server_info.max_players}\n"
+                name="📊 Información del Servidor",
+                value=f"**👥 Jugadores:** {server_info.players}/{server_info.max_players}\n"
                       f"**🗺️ Mapa:** {server_info.map_name}\n"
                       f"**🌐 Conectar:** `connect {connect_info};password elo`",
                 inline=False
@@ -661,6 +689,18 @@ def create_match_embed(server_info):
         timestamp=datetime.now()
     )
     
+    # Información del servidor
+    server_config = next((s for s in SERVERS if s['name'] == server_info.name), None)
+    connect_info = f"{server_config['ip']}:{server_config['port']}" if server_config else "N/A"
+    
+    embed.add_field(
+        name="📊 Información del Servidor",
+        value=f"**👥 Jugadores:** {match_info['players_count']}/{match_info['max_players']}\n"
+              f"**🗺️ Mapa:** {match_info['map_name']}\n"
+              f"**🌐 Conectar:** `connect {connect_info};password elo`",
+        inline=False
+    )
+    
     # Marcador principal
     score_text = f"**{match_info['team_home']} {match_info['goals_home']} - {match_info['goals_away']} {match_info['team_away']}**"
     
@@ -671,137 +711,81 @@ def create_match_embed(server_info):
         inline=False
     )
     
-    # Información del servidor
-    server_config = next((s for s in SERVERS if s['name'] == server_info.name), None)
-    connect_info = f"{server_config['ip']}:{server_config['port']}" if server_config else "N/A"
-    
-    embed.add_field(
-        name="🎮 Información del Servidor",
-        value=f"**👥 Jugadores:** {match_info['players_count']}/{match_info['max_players']}\n"
-              f"**🗺️ Mapa:** {match_info['map_name']}\n"
-              f"**🌐 Conectar:** `connect {connect_info};password elo`",
-        inline=False
-    )
-    
+    # Goles detallados por equipo
     if match_info.get('goals_detail'):
         # Formatear goles del equipo local
-        home_goals_text = ""
-        away_goals_text = ""
+        home_goals = [goal for goal in match_info['goals_detail'] if goal['team'] == 'home']
+        away_goals = [goal for goal in match_info['goals_detail'] if goal['team'] == 'away']
         
-        # Separar goles por equipo
-        for goal in match_info['goals_detail']:
-            goal_line = f"⚽ **{goal['minute']}'** {goal['scorer_name']}"
-            
-            # Agregar asistencia si existe
-            if goal['assist_name']:
-                goal_line += f" ({goal['assist_name']})"
-            
-            goal_line += "\n"
-            
-            # Agregar al equipo correspondiente
-            if goal['team'] == 'home':
-                home_goals_text += goal_line
-            elif goal['team'] == 'away':
-                away_goals_text += goal_line
-        
-        # Si no hay goles, mostrar mensaje
-        if not home_goals_text:
+        # Goles equipo local
+        if home_goals:
+            home_goals_text = ""
+            for goal in home_goals:
+                assist_text = f" ({goal['assist_name']})" if goal['assist_name'] else ""
+                home_goals_text += f"{goal['scorer_name']} ({goal['minute']}){assist_text}\n"
+        else:
             home_goals_text = "Sin goles"
-        if not away_goals_text:
-            away_goals_text = "Sin goles"
         
-        # Agregar campos de goles al embed
         embed.add_field(
-            name=f"⚽ Goles - {match_info['team_home']}",
+            name=f"⚽ Goles {match_info['team_home']}:",
             value=home_goals_text.strip(),
             inline=True
         )
         
+        # Goles equipo visitante
+        if away_goals:
+            away_goals_text = ""
+            for goal in away_goals:
+                assist_text = f" ({goal['assist_name']})" if goal['assist_name'] else ""
+                away_goals_text += f"{goal['scorer_name']} ({goal['minute']}){assist_text}\n"
+        else:
+            away_goals_text = "Sin goles"
+        
         embed.add_field(
-            name=f"⚽ Goles - {match_info['team_away']}",
+            name=f"⚽ Goles {match_info['team_away']}:",
             value=away_goals_text.strip(),
             inline=True
         )
         
-        # Campo vacío para hacer nueva línea (truco de Discord)
+        # Campo vacío para hacer nueva línea
         embed.add_field(name="\u200b", value="\u200b", inline=True)
         
-        # === MÁXIMOS GOLEADORES ===
-        # Contar goles por jugador
-        scorer_count = {}
-        for goal in match_info['goals_detail']:
-            scorer = goal['scorer_name']
-            if scorer in scorer_count:
-                scorer_count[scorer] += 1
-            else:
-                scorer_count[scorer] = 1
-        
-        # Ordenar por cantidad de goles (mayor a menor)
-        top_scorers = sorted(scorer_count.items(), key=lambda x: x[1], reverse=True)
-        
-        # Mostrar top 3 goleadores
-        if top_scorers:
-            scorers_text = ""
-            medals = ["🥇", "🥈", "🥉"]
+        # Máximos goleadores (si hay goles)
+        if home_goals or away_goals:
+            scorer_count = {}
+            for goal in match_info['goals_detail']:
+                scorer = goal['scorer_name']
+                scorer_count[scorer] = scorer_count.get(scorer, 0) + 1
             
-            for i, (player_name, goal_count) in enumerate(top_scorers[:3]):
-                medal = medals[i] if i < 3 else "🏆"
-                plural = "goles" if goal_count > 1 else "gol"
-                scorers_text += f"{medal} **{player_name}** ({goal_count} {plural})\n"
+            # Ordenar por cantidad de goles
+            top_scorers = sorted(scorer_count.items(), key=lambda x: x[1], reverse=True)
             
-            embed.add_field(
-                name="🏆 Máximos Goleadores",
-                value=scorers_text.strip(),
-                inline=False
-            )
-            
-    # Equipos y jugadores activos
-    home_players = get_active_players(match_info['lineup_home'])
-    away_players = get_active_players(match_info['lineup_away'])
-    
-    if home_players or away_players:
-        # Equipo Local
-        if home_players:
-            home_text = ""
-            for player in home_players[:6]:  # Máximo 6 para no saturar
-                home_text += f"**{player['position']}:** {player['name']}\n"
-            if len(home_players) > 6:
-                home_text += f"... y {len(home_players) - 6} más"
-        else:
-            home_text = "Solo bots activos"
-        
+            if top_scorers:
+                scorers_text = ""
+                medals = ["🥇", "🥈", "🥉"]
+                
+                for i, (player_name, goal_count) in enumerate(top_scorers[:3]):
+                    medal = medals[i] if i < 3 else "🏆"
+                    plural = "goles" if goal_count > 1 else "gol"
+                    scorers_text += f"{medal} **{player_name}** ({goal_count} {plural})\n"
+                
+                embed.add_field(
+                    name="🏆 Máximos Goleadores",
+                    value=scorers_text.strip(),
+                    inline=False
+                )
+    else:
+        # Sin información de goles detallada
         embed.add_field(
-            name=f"🏠 {match_info['team_home']} ({match_info['code_home']})",
-            value=home_text,
+            name=f"⚽ Goles {match_info['team_home']}:",
+            value="Sin información detallada",
             inline=True
         )
         
-        # Equipo Visitante
-        if away_players:
-            away_text = ""
-            for player in away_players[:6]:  # Máximo 6 para no saturar
-                away_text += f"**{player['position']}:** {player['name']}\n"
-            if len(away_players) > 6:
-                away_text += f"... y {len(away_players) - 6} más"
-        else:
-            away_text = "Solo bots activos"
-        
         embed.add_field(
-            name=f"✈️ {match_info['team_away']} ({match_info['code_away']})",
-            value=away_text,
+            name=f"⚽ Goles {match_info['team_away']}:",
+            value="Sin información detallada", 
             inline=True
-        )
-    
-    # Eventos del partido (si hay)
-    if match_info['events'] and len(match_info['events']) > 0:
-        events_text = ""
-        for event in match_info['events'][-3:]:  # Últimos 3 eventos
-            events_text += f"• {event}\n"
-        
-        embed.add_field(
-            name="📝 Eventos Recientes",
-            value=events_text,
-            inline=False
         )
     
     return embed
@@ -876,7 +860,7 @@ async def get_server_info_robust(server):
         match_info = None
         connection_details = match_result.get('connection_info', {})
         
-        if 'matchData' in match_result['data']:
+        if match_result['success'] and match_result['data'] and 'matchData' in match_result['data']:
             match_info = parse_match_info(match_result['data'])
             logger.info(f"✅ Match info obtenida para {server['name']} (puerto {match_result['working_port']})")
         else:
