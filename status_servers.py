@@ -52,7 +52,7 @@ SERVERS = [
         'port': 27018,
         'rcon_ports': [27018],  # SOLO este puerto para este servidor
         'id': 'iosoccer_1',     # ID único para logs
-        'max_connection_time': 30,  # Tiempo máximo total de conexión
+        'max_connection_time': 120,  # Tiempo máximo total de conexión
     },
     {
         'name': 'ELO #2', 
@@ -60,7 +60,7 @@ SERVERS = [
         'port': 27019,
         'rcon_ports': [27019],  # SOLO este puerto para este servidor
         'id': 'iosoccer_2',     # ID único para logs
-        'max_connection_time': 30,  # Tiempo máximo total de conexión
+        'max_connection_time': 120,  # Tiempo máximo total de conexión
     }
 ]
         
@@ -82,14 +82,14 @@ class ServerInfo:
         self.basic_info = basic_info  # Info básica A2S
 
 class A2SQuery:
-    """Clase para consultas A2S_INFO simplificada"""
+    """Clase para consultas A2S_INFO con timeouts aumentados"""
     
     @staticmethod
-    def query_server(ip, port, timeout=5):
-        """Consulta información básica del servidor usando A2S_INFO"""
+    def query_server(ip, port, timeout=12):  # Timeout aumentado de 5 a 12
+        """Consulta información básica del servidor usando A2S_INFO con timeout aumentado"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(timeout)
+            sock.settimeout(timeout)  # Timeout más generoso
             
             # Packet A2S_INFO
             packet = b'\xFF\xFF\xFF\xFF\x54Source Engine Query\x00'
@@ -128,7 +128,7 @@ class A2SQuery:
             players = data[offset]
             max_players = data[offset + 1]
             
-            logger.info(f"✅ A2S_INFO {ip}:{port} -> {players}/{max_players} en {map_name}")
+            logger.info(f"✅ A2S_INFO PERSISTENTE {ip}:{port} -> {players}/{max_players} en {map_name}")
             
             return {
                 'server_name': server_name,
@@ -138,41 +138,55 @@ class A2SQuery:
             }
                 
         except Exception as e:
-            logger.error(f"❌ A2S_INFO error {ip}:{port}: {e}")
+            logger.error(f"❌ A2S_INFO PERSISTENTE error {ip}:{port}: {e}")
             return None
 
+# 1. REEMPLAZAR LA CLASE RCONManager COMPLETA
 class RCONManager:
-    """Manejador RCON mejorado con reintentos y timeouts progresivos"""
+    """Manejador RCON ULTRA ROBUSTO con reintentos ilimitados hasta lograr conexión"""
     
     @staticmethod
-    async def test_rcon_connection_robust(ip, port, password, max_retries=3):
+    async def test_rcon_connection_persistent(ip, port, password, max_attempts=None):
         """
-        Prueba la conexión RCON con reintentos automáticos
-        Returns: {'success': bool, 'error': str, 'response': str, 'attempts': int}
+        Prueba la conexión RCON con PERSISTENCIA TOTAL
+        max_attempts=None significa intentos ilimitados hasta lograr conexión
+        Returns: {'success': bool, 'error': str, 'response': str, 'attempts': int, 'total_time': float}
         """
         last_error = None
+        attempt = 0
+        start_time = time.time()
         
-        # Timeouts progresivos: 8s, 12s, 15s
-        timeouts = [8, 12, 15]
+        # Timeouts progresivos más agresivos: 10s, 15s, 20s, 25s, luego 30s fijo
+        base_timeouts = [10, 15, 20, 25, 30]
         
-        for attempt in range(max_retries):
-            timeout = timeouts[min(attempt, len(timeouts) - 1)]
+        logger.info(f"🔌 CONEXIÓN PERSISTENTE iniciada para {ip}:{port} (intentos {'ilimitados' if max_attempts is None else max_attempts})")
+        
+        while max_attempts is None or attempt < max_attempts:
+            attempt += 1
+            
+            # Timeout progresivo
+            if attempt <= len(base_timeouts):
+                timeout = base_timeouts[attempt - 1]
+            else:
+                timeout = 30  # Timeout fijo después del 5to intento
             
             try:
-                logger.info(f"🔌 Intento {attempt + 1}/{max_retries} RCON {ip}:{port} (timeout: {timeout}s)")
+                logger.info(f"🔄 Intento {attempt} - RCON {ip}:{port} (timeout: {timeout}s)")
                 
-                # Usar timeout progresivo
+                # Usar timeout progresivo más generoso
                 with Client(ip, port, passwd=password, timeout=timeout) as client:
-                    # Comando de prueba simple pero confiable
-                    response = client.run('echo "RCON_TEST_OK"')
+                    # Comando de prueba confiable
+                    response = client.run('echo "RCON_PERSISTENT_TEST"')
                     
-                    if response and 'RCON_TEST_OK' in response:
-                        logger.info(f"✅ RCON {ip}:{port} - Conectado en intento {attempt + 1}")
+                    if response and 'RCON_PERSISTENT_TEST' in response:
+                        total_time = time.time() - start_time
+                        logger.info(f"✅ RCON {ip}:{port} - CONECTADO en intento {attempt} ({total_time:.2f}s total)")
                         return {
                             'success': True,
                             'error': None,
                             'response': response.strip(),
-                            'attempts': attempt + 1
+                            'attempts': attempt,
+                            'total_time': total_time
                         }
                     else:
                         last_error = f"Respuesta inesperada: {response}"
@@ -180,74 +194,116 @@ class RCONManager:
                         
             except Exception as e:
                 last_error = str(e)
-                logger.warning(f"⚠️ RCON {ip}:{port} intento {attempt + 1} falló: {e}")
-                
-                # Esperar antes del siguiente intento (excepto en el último)
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
+                logger.warning(f"⚠️ RCON {ip}:{port} intento {attempt} falló: {e}")
+            
+            # Espera progresiva entre intentos (más tiempo en intentos posteriores)
+            if attempt <= 3:
+                wait_time = 2  # 2 segundos primeros 3 intentos
+            elif attempt <= 8:
+                wait_time = 5  # 5 segundos siguientes 5 intentos
+            elif attempt <= 15:
+                wait_time = 10  # 10 segundos siguientes 7 intentos
+            else:
+                wait_time = 15  # 15 segundos para intentos posteriores
+            
+            if max_attempts is None or attempt < max_attempts:
+                logger.info(f"⏳ Esperando {wait_time}s antes del siguiente intento...")
+                await asyncio.sleep(wait_time)
         
-        logger.error(f"❌ RCON {ip}:{port} - Falló después de {max_retries} intentos")
+        total_time = time.time() - start_time
+        logger.error(f"❌ RCON {ip}:{port} - FALLÓ después de {attempt} intentos ({total_time:.2f}s total)")
         return {
             'success': False,
-            'error': f"Falló después de {max_retries} intentos: {last_error}",
+            'error': f"Falló después de {attempt} intentos ({total_time:.2f}s): {last_error}",
             'response': None,
-            'attempts': max_retries
+            'attempts': attempt,
+            'total_time': total_time
         }
     
     @staticmethod
-    async def execute_command_robust(ip, port, password, command, max_retries=2):
+    async def execute_command_persistent(ip, port, password, command, max_attempts=None):
         """
-        Ejecuta un comando RCON con reintentos
-        Returns: {'success': bool, 'response': str, 'error': str, 'attempts': int}
+        Ejecuta un comando RCON con PERSISTENCIA TOTAL
+        max_attempts=None significa intentos ilimitados hasta lograr ejecución
+        Returns: {'success': bool, 'response': str, 'error': str, 'attempts': int, 'total_time': float}
         """
         last_error = None
+        attempt = 0
+        start_time = time.time()
         
-        for attempt in range(max_retries):
+        # Timeouts especiales para comandos específicos
+        if 'matchinfo' in command.lower() or 'sv_matchinfojson' in command.lower():
+            base_timeouts = [20, 30, 40, 50, 60]  # Más tiempo para comandos JSON
+        else:
+            base_timeouts = [10, 15, 20, 25, 30]
+        
+        logger.info(f"🔄 COMANDO PERSISTENTE '{command}' en {ip}:{port} (intentos {'ilimitados' if max_attempts is None else max_attempts})")
+        
+        while max_attempts is None or attempt < max_attempts:
+            attempt += 1
+            
+            # Timeout progresivo
+            if attempt <= len(base_timeouts):
+                timeout = base_timeouts[attempt - 1]
+            else:
+                timeout = base_timeouts[-1]  # Usar el timeout más alto
+            
             try:
-                # Timeout más largo para comandos complejos como sv_matchinfojson
-                timeout = 15 if 'matchinfo' in command.lower() else 10
-                
-                logger.info(f"🔄 Ejecutando '{command}' en {ip}:{port} (intento {attempt + 1}, timeout: {timeout}s)")
+                logger.info(f"🔄 Ejecutando '{command}' intento {attempt} (timeout: {timeout}s)")
                 
                 with Client(ip, port, passwd=password, timeout=timeout) as client:
                     response = client.run(command)
                     
                     if response is not None and len(response.strip()) > 0:
-                        logger.info(f"✅ Comando '{command}' exitoso en intento {attempt + 1}: {len(response)} chars")
+                        total_time = time.time() - start_time
+                        logger.info(f"✅ Comando '{command}' EXITOSO en intento {attempt}: {len(response)} chars ({total_time:.2f}s)")
                         return {
                             'success': True,
                             'response': response.strip(),
                             'error': None,
-                            'attempts': attempt + 1
+                            'attempts': attempt,
+                            'total_time': total_time
                         }
                     else:
                         last_error = 'Sin respuesta del servidor'
-                        logger.warning(f"⚠️ '{command}' sin respuesta en intento {attempt + 1}")
+                        logger.warning(f"⚠️ '{command}' sin respuesta en intento {attempt}")
                         
             except Exception as e:
                 last_error = str(e)
-                logger.warning(f"⚠️ '{command}' falló intento {attempt + 1}: {e}")
-                
-                # Esperar antes del siguiente intento
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1.5)
+                logger.warning(f"⚠️ '{command}' falló intento {attempt}: {e}")
+            
+            # Espera progresiva entre intentos
+            if attempt <= 3:
+                wait_time = 3
+            elif attempt <= 8:
+                wait_time = 8
+            elif attempt <= 15:
+                wait_time = 15
+            else:
+                wait_time = 20
+            
+            if max_attempts is None or attempt < max_attempts:
+                logger.info(f"⏳ Esperando {wait_time}s antes del siguiente intento del comando...")
+                await asyncio.sleep(wait_time)
         
-        logger.error(f"❌ Comando '{command}' falló después de {max_retries} intentos")
+        total_time = time.time() - start_time
+        logger.error(f"❌ Comando '{command}' FALLÓ después de {attempt} intentos ({total_time:.2f}s)")
         return {
             'success': False,
             'response': '',
-            'error': f"Falló después de {max_retries} intentos: {last_error}",
-            'attempts': max_retries
+            'error': f"Falló después de {attempt} intentos ({total_time:.2f}s): {last_error}",
+            'attempts': attempt,
+            'total_time': total_time
         }
     
     @staticmethod
-    async def find_working_rcon_port_safe(server, password):
+    async def find_working_rcon_port_persistent(server, password):
         """
-        Encuentra el puerto RCON funcional de forma SEGURA
-        Solo prueba los puertos específicos definidos para cada servidor
-        Returns: {'port': int, 'success': bool, 'error': str, 'attempts_per_port': dict}
+        Encuentra el puerto RCON funcional de forma ULTRA PERSISTENTE
+        Prueba cada puerto hasta que alguno funcione, sin límite de tiempo
+        Returns: {'port': int, 'success': bool, 'error': str, 'attempts_per_port': dict, 'total_time': float}
         """
-        logger.info(f"🔍 Buscando puerto RCON seguro para {server['name']}")
+        logger.info(f"🔍 BÚSQUEDA PERSISTENTE de puerto RCON para {server['name']}")
         
         # VALIDACIÓN: Solo usar puertos explícitamente definidos
         allowed_ports = server.get('rcon_ports', [])
@@ -256,51 +312,49 @@ class RCONManager:
                 'port': None,
                 'success': False,
                 'error': 'No hay puertos RCON definidos para este servidor',
-                'attempts_per_port': {}
+                'attempts_per_port': {},
+                'total_time': 0
             }
         
         logger.info(f"🛡️ Puertos permitidos para {server['name']}: {allowed_ports}")
         
         attempts_log = {}
+        start_time = time.time()
         
-        # Probar SOLO los puertos permitidos
-        for port in allowed_ports:
-            logger.info(f"🔐 Probando puerto seguro: {port}")
+        # ESTRATEGIA: Intentar cada puerto de forma persistente hasta que UNO funcione
+        while True:  # Loop infinito hasta encontrar un puerto funcional
+            for port in allowed_ports:
+                logger.info(f"🔐 Probando puerto persistente: {port}")
+                
+                # Intentar este puerto de forma persistente (máximo 10 intentos por puerto por ronda)
+                test_result = await RCONManager.test_rcon_connection_persistent(
+                    server['ip'], port, password, max_attempts=10
+                )
+                
+                # Registrar intentos
+                if port not in attempts_log:
+                    attempts_log[port] = {'total_attempts': 0, 'rounds': 0, 'last_error': ''}
+                
+                attempts_log[port]['total_attempts'] += test_result.get('attempts', 0)
+                attempts_log[port]['rounds'] += 1
+                attempts_log[port]['last_error'] = test_result.get('error', '')
+                
+                if test_result['success']:
+                    total_time = time.time() - start_time
+                    logger.info(f"✅ Puerto RCON ENCONTRADO: {port} (total: {total_time:.2f}s, {attempts_log[port]['total_attempts']} intentos)")
+                    return {
+                        'port': port,
+                        'success': True,
+                        'error': None,
+                        'attempts_per_port': attempts_log,
+                        'total_time': total_time
+                    }
+                else:
+                    logger.warning(f"❌ Puerto {port} falló ronda {attempts_log[port]['rounds']}: {test_result['error']}")
             
-            test_result = await RCONManager.test_rcon_connection_robust(
-                server['ip'], port, password, max_retries=3
-            )
-            
-            attempts_log[port] = {
-                'attempts': test_result.get('attempts', 0),
-                'success': test_result['success'],
-                'error': test_result.get('error', '')
-            }
-            
-            if test_result['success']:
-                logger.info(f"✅ Puerto RCON seguro encontrado: {port} (después de {test_result['attempts']} intentos)")
-                return {
-                    'port': port,
-                    'success': True,
-                    'error': None,
-                    'attempts_per_port': attempts_log
-                }
-            else:
-                logger.warning(f"❌ Puerto {port} falló: {test_result['error']}")
-        
-        # Si ningún puerto funciona
-        error_summary = f"Ningún puerto RCON funcional encontrado. Intentos: "
-        for port, info in attempts_log.items():
-            error_summary += f"{port}({info['attempts']}x), "
-        error_summary = error_summary.rstrip(', ')
-        
-        logger.error(f"❌ {error_summary}")
-        return {
-            'port': None,
-            'success': False,
-            'error': error_summary,
-            'attempts_per_port': attempts_log
-        }
+            # Si llegamos aquí, ningún puerto funcionó en esta ronda
+            logger.warning(f"⚠️ Ningún puerto funcionó en esta ronda. Esperando 30s antes de intentar todos de nuevo...")
+            await asyncio.sleep(30)  # Espera larga antes de reintentar todos los puertos
     
     @staticmethod
     async def find_working_rcon_port(server, password):
@@ -317,31 +371,94 @@ class RCONManager:
         return await RCONManager.execute_command_robust(ip, port, password, command, max_retries=2)
     
     @staticmethod
-    async def get_match_info_json_safe(server, password):
+    async def find_working_rcon_port_persistent(server, password):
         """
-        Obtiene información del partido de forma SEGURA con reintentos
-        Returns: {'success': bool, 'data': dict, 'working_port': int, 'error': str, 'connection_info': dict}
+        Encuentra el puerto RCON funcional de forma ULTRA PERSISTENTE
+        Prueba cada puerto hasta que alguno funcione, sin límite de tiempo
+        Returns: {'port': int, 'success': bool, 'error': str, 'attempts_per_port': dict, 'total_time': float}
         """
-        logger.info(f"🎮 Obteniendo match info JSON SEGURO para {server['name']}")
+        logger.info(f"🔍 BÚSQUEDA PERSISTENTE de puerto RCON para {server['name']}")
         
-        # 1. Encontrar puerto funcional de forma segura
-        port_result = await RCONManager.find_working_rcon_port_safe(server, password)
+        # VALIDACIÓN: Solo usar puertos explícitamente definidos
+        allowed_ports = server.get('rcon_ports', [])
+        if not allowed_ports:
+            return {
+                'port': None,
+                'success': False,
+                'error': 'No hay puertos RCON definidos para este servidor',
+                'attempts_per_port': {},
+                'total_time': 0
+            }
+        
+        logger.info(f"🛡️ Puertos permitidos para {server['name']}: {allowed_ports}")
+        
+        attempts_log = {}
+        start_time = time.time()
+        
+        # ESTRATEGIA: Intentar cada puerto de forma persistente hasta que UNO funcione
+        while True:  # Loop infinito hasta encontrar un puerto funcional
+            for port in allowed_ports:
+                logger.info(f"🔐 Probando puerto persistente: {port}")
+                
+                # Intentar este puerto de forma persistente (máximo 10 intentos por puerto por ronda)
+                test_result = await RCONManager.test_rcon_connection_persistent(
+                    server['ip'], port, password, max_attempts=10
+                )
+                
+                # Registrar intentos
+                if port not in attempts_log:
+                    attempts_log[port] = {'total_attempts': 0, 'rounds': 0, 'last_error': ''}
+                
+                attempts_log[port]['total_attempts'] += test_result.get('attempts', 0)
+                attempts_log[port]['rounds'] += 1
+                attempts_log[port]['last_error'] = test_result.get('error', '')
+                
+                if test_result['success']:
+                    total_time = time.time() - start_time
+                    logger.info(f"✅ Puerto RCON ENCONTRADO: {port} (total: {total_time:.2f}s, {attempts_log[port]['total_attempts']} intentos)")
+                    return {
+                        'port': port,
+                        'success': True,
+                        'error': None,
+                        'attempts_per_port': attempts_log,
+                        'total_time': total_time
+                    }
+                else:
+                    logger.warning(f"❌ Puerto {port} falló ronda {attempts_log[port]['rounds']}: {test_result['error']}")
+            
+            # Si llegamos aquí, ningún puerto funcionó en esta ronda
+            logger.warning(f"⚠️ Ningún puerto funcionó en esta ronda. Esperando 30s antes de intentar todos de nuevo...")
+            await asyncio.sleep(30)  # Espera larga antes de reintentar todos los puertos
+    
+    @staticmethod
+    async def get_match_info_json_persistent(server, password):
+        """
+        Obtiene información del partido de forma ULTRA PERSISTENTE
+        No se rinde hasta conseguir la información
+        Returns: {'success': bool, 'data': dict, 'working_port': int, 'error': str, 'connection_info': dict, 'total_time': float}
+        """
+        logger.info(f"🎮 Obteniendo match info JSON PERSISTENTE para {server['name']}")
+        start_time = time.time()
+        
+        # 1. Encontrar puerto funcional de forma persistente
+        port_result = await RCONManager.find_working_rcon_port_persistent(server, password)
         
         if not port_result['success']:
             return {
                 'success': False,
                 'data': None,
                 'working_port': None,
-                'error': f"Sin puertos RCON: {port_result['error']}",
-                'connection_info': port_result['attempts_per_port']
+                'error': f"Sin puertos RCON funcionales: {port_result['error']}",
+                'connection_info': port_result['attempts_per_port'],
+                'total_time': time.time() - start_time
             }
         
         working_port = port_result['port']
-        logger.info(f"🔐 Usando puerto seguro {working_port} para match info")
+        logger.info(f"🔐 Usando puerto persistente {working_port} para match info")
         
-        # 2. Ejecutar sv_matchinfojson con reintentos
-        result = await RCONManager.execute_command_robust(
-            server['ip'], working_port, password, 'sv_matchinfojson', max_retries=3
+        # 2. Ejecutar sv_matchinfojson de forma persistente (sin límite de intentos)
+        result = await RCONManager.execute_command_persistent(
+            server['ip'], working_port, password, 'sv_matchinfojson', max_attempts=None
         )
         
         if not result['success'] or not result['response']:
@@ -349,17 +466,19 @@ class RCONManager:
                 'success': False,
                 'data': None,
                 'working_port': working_port,
-                'error': f"Fallo comando JSON: {result['error']}",
+                'error': f"Fallo comando JSON persistente: {result['error']}",
                 'connection_info': {
                     'port_attempts': port_result['attempts_per_port'],
-                    'command_attempts': result.get('attempts', 0)
-                }
+                    'command_attempts': result.get('attempts', 0),
+                    'command_time': result.get('total_time', 0)
+                },
+                'total_time': time.time() - start_time
             }
         
         # 3. Parsear JSON con manejo de errores mejorado
         try:
             response = result['response'].strip()
-            logger.info(f"📄 Respuesta cruda recibida: {len(response)} caracteres")
+            logger.info(f"📄 Respuesta JSON persistente recibida: {len(response)} caracteres")
             
             # Buscar JSON en la respuesta de forma más robusta
             json_start = response.find('{')
@@ -380,10 +499,12 @@ class RCONManager:
                         'success': False,
                         'data': None,
                         'working_port': working_port,
-                        'error': f'JSON no encontrado en respuesta de {len(response)} caracteres',
+                        'error': f'JSON no encontrado en respuesta persistente de {len(response)} caracteres',
                         'connection_info': {
-                            'raw_response_preview': response[:200] + '...' if len(response) > 200 else response
-                        }
+                            'raw_response_preview': response[:300] + '...' if len(response) > 300 else response,
+                            'parsing_attempts': 'failed_pattern_search'
+                        },
+                        'total_time': time.time() - start_time
                     }
                 
                 json_text = json_line
@@ -393,7 +514,8 @@ class RCONManager:
             # Parsear JSON
             match_data = json.loads(json_text)
             
-            logger.info(f"✅ JSON parseado exitosamente: {len(json_text)} caracteres, {len(match_data)} campos")
+            total_time = time.time() - start_time
+            logger.info(f"✅ JSON PERSISTENTE parseado exitosamente: {len(json_text)} caracteres, {len(match_data)} campos ({total_time:.2f}s total)")
             
             return {
                 'success': True,
@@ -403,21 +525,25 @@ class RCONManager:
                 'connection_info': {
                     'port_attempts': port_result['attempts_per_port'],
                     'command_attempts': result.get('attempts', 0),
+                    'command_time': result.get('total_time', 0),
                     'json_size': len(json_text)
-                }
+                },
+                'total_time': total_time
             }
             
         except json.JSONDecodeError as e:
-            logger.error(f"❌ Error parsing JSON: {e}")
+            logger.error(f"❌ Error parsing JSON persistente: {e}")
             return {
                 'success': False,
                 'data': None,
                 'working_port': working_port,
-                'error': f'JSON inválido: {str(e)}',
+                'error': f'JSON inválido en respuesta persistente: {str(e)}',
                 'connection_info': {
-                    'json_text_preview': json_text[:300] if 'json_text' in locals() else 'N/A',
-                    'parse_error': str(e)
-                }
+                    'json_text_preview': json_text[:500] if 'json_text' in locals() else 'N/A',
+                    'parse_error': str(e),
+                    'total_attempts': result.get('attempts', 0)
+                },
+                'total_time': time.time() - start_time
             }
     
     @staticmethod
@@ -984,20 +1110,42 @@ def create_status_embed(servers_info):
 
 # ============= FUNCIÓN DE AUTO-UPDATE =============
 
-async def auto_update_status_detailed (channel, messages, initial_servers_info):
-    """Función que actualiza automáticamente TODOS los mensajes (resumen + detalles)"""
+async def auto_update_status_detailed(channel, messages, initial_servers_info):
+    """Función que actualiza automáticamente con tolerancia a conexiones lentas"""
     update_count = 0
     
     try:
         while True:  # Loop infinito
-            await asyncio.sleep(60)  # 1 minuto
+            await asyncio.sleep(90)  # Aumentado a 90 segundos para dar más tiempo
             update_count += 1
             
-            logger.info(f"🔄 Auto-update detallado #{update_count} para canal {channel.id}")
+            logger.info(f"🔄 Auto-update PERSISTENTE #{update_count} para canal {channel.id}")
             
-            # Obtener información actualizada de todos los servidores
+            # Mensaje de "actualizando" en el primer mensaje
+            if len(messages) > 0:
+                updating_embed = discord.Embed(
+                    title="🔄 Actualizando servidores...",
+                    description=f"Actualización #{update_count} - Obteniendo información persistente...",
+                    color=0xffaa00
+                )
+                try:
+                    await messages[0].edit(embed=updating_embed)
+                except:
+                    pass
+            
+            # Obtener información actualizada de todos los servidores (PERSISTENTE)
             servers_info = []
-            for server in SERVERS:
+            for i, server in enumerate(SERVERS):
+                logger.info(f"🔄 Auto-update: procesando {server['name']} ({i+1}/{len(SERVERS)})")
+                
+                # Actualizar mensaje de progreso
+                if len(messages) > 0:
+                    updating_embed.description = f"Actualización #{update_count} - Procesando {server['name']} ({i+1}/{len(SERVERS)})"
+                    try:
+                        await messages[0].edit(embed=updating_embed)
+                    except:
+                        pass
+                
                 server_info = await get_server_info_robust(server)
                 servers_info.append(server_info)
             
@@ -1005,7 +1153,7 @@ async def auto_update_status_detailed (channel, messages, initial_servers_info):
             if len(messages) > 0:
                 status_embed = create_status_embed(servers_info)
                 status_embed.set_footer(
-                    text=f"🔄 Auto-actualización #{update_count} | Próxima actualización en 1 minuto | {datetime.now().strftime('%H:%M:%S')}"
+                    text=f"🔄 Auto-actualización PERSISTENTE #{update_count} | Próxima actualización en 90s | {datetime.now().strftime('%H:%M:%S')}"
                 )
                 
                 try:
@@ -1022,21 +1170,21 @@ async def auto_update_status_detailed (channel, messages, initial_servers_info):
                     except Exception as e:
                         logger.error(f"❌ Error actualizando detalle {server_info.name}: {e}")
             
-            logger.info(f"✅ Auto-update detallado #{update_count} completado")
+            logger.info(f"✅ Auto-update PERSISTENTE #{update_count} completado")
     
     except asyncio.CancelledError:
-        logger.info(f"🛑 Auto-update detallado cancelado para canal {channel.id}")
+        logger.info(f"🛑 Auto-update PERSISTENTE cancelado para canal {channel.id}")
     except Exception as e:
-        logger.error(f"❌ Error fatal en auto-update detallado: {e}")
+        logger.error(f"❌ Error fatal en auto-update PERSISTENTE: {e}")
     finally:
         # Limpiar el registro del canal
         if channel.id in active_status_channels:
             del active_status_channels[channel.id]
-        logger.info(f"🧹 Auto-update detallado limpiado para canal {channel.id}")
+        logger.info(f"🧹 Auto-update PERSISTENTE limpiado para canal {channel.id}")
 
-# Función mejorada para obtener información del servidor
+# 2. MEJORAR LA FUNCIÓN get_server_info_robust
 async def get_server_info_robust(server):
-    """Obtiene información completa del servidor con manejo robusto de errores - VERSIÓN CORREGIDA"""
+    """Obtiene información completa del servidor con conexión ULTRA PERSISTENTE"""
     
     # Validar configuración del servidor
     if not server.get('rcon_ports'):
@@ -1047,10 +1195,10 @@ async def get_server_info_robust(server):
         )
     
     try:
-        logger.info(f"📡 Consultando servidor robusto: {server['name']} (ID: {server.get('id', 'unknown')})")
+        logger.info(f"📡 Consultando servidor ULTRA ROBUSTO: {server['name']} (ID: {server.get('id', 'unknown')})")
         
-        # 1. Información básica con A2S_INFO (timeout fijo)
-        a2s_info = A2SQuery.query_server(server['ip'], server['port'], timeout=8)
+        # 1. Información básica con A2S_INFO (timeout aumentado)
+        a2s_info = A2SQuery.query_server(server['ip'], server['port'], timeout=12)  # Timeout aumentado
         
         if not a2s_info:
             logger.warning(f"❌ A2S_INFO falló para {server['name']}")
@@ -1061,24 +1209,24 @@ async def get_server_info_robust(server):
         
         logger.info(f"✅ A2S_INFO exitoso para {server['name']}: {a2s_info['players']}/{a2s_info['max_players']}")
         
-        # 2. Información del partido con método seguro
-        match_result = await RCONManager.get_match_info_json_safe(server, RCON_PASSWORD)
+        # 2. Información del partido con método ULTRA PERSISTENTE
+        match_result = await RCONManager.get_match_info_json_persistent(server, RCON_PASSWORD)
         
         match_info = None
         connection_details = match_result.get('connection_info', {})
         
         if match_result['success'] and match_result['data']:
-            logger.info(f"📊 JSON obtenido para {server['name']}: {len(str(match_result['data']))} caracteres")
+            logger.info(f"📊 JSON PERSISTENTE obtenido para {server['name']}: {len(str(match_result['data']))} caracteres en {match_result.get('total_time', 0):.2f}s")
             
-            # SIEMPRE intentar parsear el JSON, sin importar si es básico o completo
+            # SIEMPRE intentar parsear el JSON
             match_info = parse_match_info(match_result['data'])
             
             if match_info:
-                logger.info(f"✅ Match info parseada: {match_info['team_home']} {match_info['goals_home']}-{match_info['goals_away']} {match_info['team_away']} ({match_info['time_display']})")
+                logger.info(f"✅ Match info PERSISTENTE parseada: {match_info['team_home']} {match_info['goals_home']}-{match_info['goals_away']} {match_info['team_away']} ({match_info['time_display']})")
             else:
-                logger.warning(f"⚠️ No se pudo parsear match info para {server['name']}")
+                logger.warning(f"⚠️ No se pudo parsear match info para {server['name']} (JSON obtenido pero parsing falló)")
         else:
-            logger.warning(f"⚠️ No se pudo obtener JSON para {server['name']}: {match_result['error']}")
+            logger.warning(f"⚠️ No se pudo obtener JSON para {server['name']} después de {match_result.get('total_time', 0):.2f}s: {match_result['error']}")
             match_info = None
         
         return ServerInfo(
@@ -1092,7 +1240,7 @@ async def get_server_info_robust(server):
         )
         
     except Exception as e:
-        logger.error(f"❌ Error obteniendo info robusta de {server['name']}: {e}")
+        logger.error(f"❌ Error obteniendo info ULTRA ROBUSTA de {server['name']}: {e}")
         return ServerInfo(
             name=server['name'],
             status="🔴 Error General",
@@ -1218,7 +1366,77 @@ async def on_ready():
     logger.info("="*60)
     active_status_channels.clear()
 logger.info("🧹 Auto-updates previos limpiados al iniciar")
-
+@bot.command(name='test_persistent')
+async def test_persistent_connection(ctx, server_num: int = 1):
+    """Prueba conexión persistente a un servidor específico"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Solo administradores")
+        return
+    
+    if server_num < 1 or server_num > len(SERVERS):
+        await ctx.send(f"❌ Servidor inválido. Usa 1-{len(SERVERS)}")
+        return
+    
+    server = SERVERS[server_num - 1]
+    
+    embed = discord.Embed(
+        title=f"🔄 Test Conexión Persistente - {server['name']}",
+        description="Probando conexión RCON hasta que funcione...",
+        color=0xff6600
+    )
+    
+    message = await ctx.send(embed=embed)
+    start_time = time.time()
+    
+    # Test de conexión persistente
+    result = await RCONManager.find_working_rcon_port_persistent(server, RCON_PASSWORD)
+    
+    total_time = time.time() - start_time
+    
+    if result['success']:
+        embed.color = 0x00ff00
+        embed.description = f"✅ **CONEXIÓN EXITOSA** en {total_time:.2f}s"
+        
+        details = f"**Puerto funcional:** {result['port']}\n"
+        details += f"**Tiempo total:** {result.get('total_time', total_time):.2f}s\n"
+        
+        for port, info in result.get('attempts_per_port', {}).items():
+            details += f"**Puerto {port}:** {info.get('total_attempts', 0)} intentos en {info.get('rounds', 0)} rondas\n"
+        
+        embed.add_field(
+            name="📊 Detalles de Conexión",
+            value=details,
+            inline=False
+        )
+        
+        # Test comando específico
+        cmd_result = await RCONManager.execute_command_persistent(
+            server['ip'], result['port'], RCON_PASSWORD, 'sv_matchinfojson', max_attempts=3
+        )
+        
+        if cmd_result['success']:
+            embed.add_field(
+                name="✅ Test sv_matchinfojson",
+                value=f"**Éxito:** {len(cmd_result['response'])} caracteres en {cmd_result.get('attempts', 1)} intentos",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="❌ Test sv_matchinfojson",
+                value=f"**Error:** {cmd_result['error']}",
+                inline=False
+            )
+    else:
+        embed.color = 0xff0000
+        embed.description = f"❌ **CONEXIÓN FALLÓ** después de {total_time:.2f}s"
+        embed.add_field(
+            name="❌ Error",
+            value=result['error'],
+            inline=False
+        )
+    
+    await message.edit(embed=embed)
+    
 # Comando para diagnóstico completo
 @bot.command(name='diagnose')
 async def diagnose_system(ctx):
@@ -1876,7 +2094,42 @@ async def debug_parse(ctx, server_num: int = 1):
         )
     
     await message.edit(embed=embed)
-
+    # ============= MÉTODOS DE COMPATIBILIDAD (mantener nombres existentes) =============
+    
+    @staticmethod
+    async def test_rcon_connection_robust(ip, port, password, max_retries=3):
+        """Alias de compatibilidad - ahora usa el método persistente"""
+        return await RCONManager.test_rcon_connection_persistent(ip, port, password, max_retries)
+    
+    @staticmethod
+    async def execute_command_robust(ip, port, password, command, max_retries=2):
+        """Alias de compatibilidad - ahora usa el método persistente"""
+        return await RCONManager.execute_command_persistent(ip, port, password, command, max_retries)
+    
+    @staticmethod
+    async def find_working_rcon_port_safe(server, password):
+        """Alias de compatibilidad - ahora usa el método persistente"""
+        return await RCONManager.find_working_rcon_port_persistent(server, password)
+    
+    @staticmethod
+    async def get_match_info_json_safe(server, password):
+        """Alias de compatibilidad - ahora usa el método persistente"""
+        return await RCONManager.get_match_info_json_persistent(server, password)
+    
+    @staticmethod
+    async def find_working_rcon_port(server, password):
+        """Alias para compatibilidad total"""
+        return await RCONManager.find_working_rcon_port_persistent(server, password)
+    
+    @staticmethod
+    async def execute_command(ip, port, password, command, timeout=10):
+        """Alias para compatibilidad total"""
+        return await RCONManager.execute_command_persistent(ip, port, password, command, max_attempts=5)
+    
+    @staticmethod
+    async def get_match_info_json(server, password):
+        """Alias para compatibilidad total"""
+        return await RCONManager.get_match_info_json_persistent(server, password)
 @bot.command(name='fix_guide')
 async def rcon_fix_guide(ctx):
     """Guía para configurar RCON correctamente"""
