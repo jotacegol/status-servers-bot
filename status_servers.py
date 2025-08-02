@@ -1328,9 +1328,9 @@ async def on_ready():
         start_time = time.time()
         
         for port in server.get('rcon_ports', []):
-            port_test = await RCONManager.test_rcon_connection_robust(
-                server['ip'], port, RCON_PASSWORD, max_retries=1  # Solo 1 intento en inicio
-            )
+            port_test = await RCONManager.test_rcon_connection_persistent(
+    server['ip'], port, RCON_PASSWORD, max_attempts=1
+)
             
             server_connectivity['ports_tested'].append({
                 'port': port,
