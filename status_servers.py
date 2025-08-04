@@ -49,16 +49,16 @@ SERVERS = [
     {
         'name': 'ELO #1',
         'ip': '45.235.98.16',
-        'port': 27029,
-        'rcon_ports': [27029],  # SOLO este puerto para este servidor
+        'port': 27018,
+        'rcon_ports': [27018],  # SOLO este puerto para este servidor
         'id': 'iosoccer_1',     # ID único para logs
         'max_connection_time': 120,  # Tiempo máximo total de conexión
     },
     {
         'name': 'ELO #2', 
         'ip': '45.235.98.16',
-        'port': 27031,
-        'rcon_ports': [27031],  # SOLO este puerto para este servidor
+        'port': 27019,
+        'rcon_ports': [27019],  # SOLO este puerto para este servidor
         'id': 'iosoccer_2',     # ID único para logs
         'max_connection_time': 120,  # Tiempo máximo total de conexión
     }
@@ -926,7 +926,7 @@ def create_match_embed_improved(server_info):
                 name="📊 Servidor Online (Sin Match Info)",
                 value=f"**👥 Jugadores:** {server_info.players}/{server_info.max_players}\n"
                       f"**🗺️ Mapa:** {server_info.map_name}\n"
-                      f"**🌐 Conectar:** `connect {connect_info};password chimpance`\n"
+                      f"**🌐 Conectar:** `connect {connect_info};password elo`\n"
                       f"**⚠️ Estado:** Sin información de partido disponible",
                 inline=False
             )
@@ -971,7 +971,7 @@ def create_match_embed_improved(server_info):
         name="📊 Información del Servidor",
         value=f"**👥 Jugadores:** {match_info['players_count']}/{match_info['max_players']}\n"
               f"**🗺️ Mapa:** {match_info['map_name']}\n"
-              f"**🌐 Conectar:** `connect {connect_info};password chimpance`",
+              f"**🌐 Conectar:** `connect {connect_info};password elo`",
         inline=False
     )
     
